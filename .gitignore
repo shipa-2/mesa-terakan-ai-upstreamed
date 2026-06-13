@@ -1,0 +1,17 @@
+# Build artifacts
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+src/
+pkg/
+mesa/
+build-*/
+*.o
+*.so
+
+# Editor / OS
+*~
+*.swp
+.DS_Store
+
+# Local dev clones
+terakan-mesa-src/
