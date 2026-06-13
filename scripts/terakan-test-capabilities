@@ -29,7 +29,7 @@ run 6 vkcube
 
 echo "--- Device features (grep) ---"
 timeout 25 vulkaninfo 2>/dev/null | grep -E \
-  'deviceName|apiVersion|multiDrawIndirect|shaderDraw|shaderSampledImageArrayDynamicIndexing|shaderStorageBufferArrayDynamicIndexing|maxPerStageDescriptorSamplers|maxPerStageDescriptorSampledImages' \
-  | head -20 || true
+  'deviceName|apiVersion|multiDrawIndirect|shaderDraw|shaderSampledImageArrayDynamicIndexing|shaderStorageBufferArrayDynamicIndexing|shaderSampledImageArrayNonUniformIndexing|descriptorBindingPartiallyBound|VK_EXT_descriptor_indexing|maxPerStageDescriptorSamplers|maxPerStageDescriptorSampledImages' \
+  | head -25 || true
 
 echo "Done."

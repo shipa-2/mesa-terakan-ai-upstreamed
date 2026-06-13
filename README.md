@@ -38,6 +38,35 @@ See [docs/BUILD.md](docs/BUILD.md) for full build instructions.
 | `0004-implement-cmd-blit-image2.patch` | Basic `CmdBlitImage2` (1:1 via copy) |
 | `0005-implement-scaled-blit-image2.patch` | Scaled blit meta-shader |
 | `0006-blit-batch-and-dynamic-indexing-features.patch` | Blit batching/tiles + dynamic indexing features |
+| `0007-implement-draw-indirect.patch` | `CmdDrawIndirect*` + `multiDrawIndirect` |
+| `0008-vk-ext-descriptor-indexing.patch` | `VK_EXT_descriptor_indexing` (update-after-bind, partially bound) |
+
+## Vulkan API status
+
+Полная матрица: **[docs/VULKAN_STATUS.md](docs/VULKAN_STATUS.md)** (проверено по исходникам Terakan + патчи 0001–0008).
+
+**Приоритеты:** **P0** — обязательно для базового 3D+WSI · **P1** — игры/STK · **P2** — полезно · **P3** — опционально / лимит железа.
+
+**Слои:** **HW** — пакеты в IB · **common** — Mesa `vk_common` (состояние) · **meta** — внутренние shader-pass'ы.
+
+| P | Область | Обязательность | Статус |
+|---|---------|----------------|--------|
+| P0 | Instance, device, memory, buffer, image | да | ✅ HW + common |
+| P0 | Graphics pipeline, shader module, layout | да | ✅ HW + common |
+| P0 | Dynamic rendering, draw, bind state | да | ✅ HW + common |
+| P0 | Descriptors, barriers, WSI, sync | да | ✅ HW + common |
+| P1 | Draw indirect, descriptor indexing | STK | ✅ patches 0007–0008 |
+| P1 | Copy/blit/clear, BC textures, queries | игры | ✅ / blit ⚠️ |
+| P1 | `shaderDrawParameters` | STK/DXVK | ✅ |
+| P2 | Legacy render pass | редко | ⚠️ state only → use dynamic rendering |
+| P2 | Compute dispatch | compute-игры | ❌ |
+| P2 | Resolve, pipeline cache, `DrawIndirectCount` | — | ❌ TODO |
+| P3 | GS/TS, wide lines, RT/mesh | — | ❌ |
+| P3 | 512 samplers «at once» (STK ideal) | perf | 🚫 **18/stage** |
+
+**Command buffer:** 25 `Cmd*` с GPU-путём Terakan (draw, transfer, barrier, query, dynamic rendering); ещё ~245 через `vk_common` (viewport, scissor, bind pipeline, dynamic state и т.д.).
+
+**STK:** indexing + indirect ✅; bind 512 textures at once 🚫 (fallback на rebinding).
 
 ## Testing (safe, no heavy apps)
 
@@ -57,7 +86,7 @@ See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) — `multiDrawIndirect`, `VK_EXT_descriptor_indexing`, blit stability, etc.
+See [docs/ROADMAP.md](docs/ROADMAP.md) — blit stability, `CmdDrawIndirectCount`, pipeline cache, etc.
 
 ## License
 

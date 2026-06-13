@@ -12,18 +12,22 @@ Driver-focused tasks (not application-specific hacks).
 - [x] `shaderDrawParameters` advertised
 - [x] glibc 2.42 / GCC 16 build fixes
 - [x] Safe test script `terakan-test-capabilities`
+- [x] **`CmdDrawIndirect`** + `multiDrawIndirect` / `drawIndirectFirstInstance` (patch 0007)
+- [x] **`VK_EXT_descriptor_indexing`** — update-after-bind, partially bound, runtime arrays (patch 0008)
+- [x] Vulkan status matrix — [VULKAN_STATUS.md](VULKAN_STATUS.md)
 
 ## In progress / next
 
-- [ ] **CmdDrawIndirect** + `multiDrawIndirect` / `drawIndirectFirstInstance`
-- [ ] **VK_EXT_descriptor_indexing** (update-after-bind, partially bound)
 - [ ] Blit stability under heavy UI upload loads
+- [ ] `CmdDrawIndirectCount`
+- [ ] MSAA resolve in `CmdEndRendering`
 - [ ] `geometryShader` (limited use on TeraScale)
 - [ ] Pipeline cache UUID / `vkGetDescriptorSetLayoutSupport`
+- [ ] `CmdClearDepthStencilImage` (optional; `ClearAttachments` works for dynamic rendering)
 
 ## Hardware limits (not fixable by lying to apps)
 
-- **18 samplers per shader stage** — apps needing 512 bindless samplers require descriptor indexing
+- **18 samplers per shader stage** — apps needing 512 bindless samplers require descriptor indexing + rebinding (STK fallback)
 - Single shared GPU — GPU hang freezes the whole desktop session
 
 ## Target hardware

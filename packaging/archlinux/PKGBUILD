@@ -5,7 +5,7 @@
 pkgbase=vulkan-terakan
 pkgname=(vulkan-terakan lib32-vulkan-terakan)
 pkgver=2026.06.10.r208352.g3ea9ca1acfd
-pkgrel=8
+pkgrel=10
 _branch=Terakan_Backup_2026-06-10_2_Meta_MSAA
 pkgdesc="Vulkan 1.1 and OpenGL (r600) for AMD TeraScale (HD 2000-7000)"
 arch=('x86_64')
@@ -41,6 +41,8 @@ source=(
   "../../patches/0004-implement-cmd-blit-image2.patch"
   "../../patches/0005-implement-scaled-blit-image2.patch"
   "../../patches/0006-blit-batch-and-dynamic-indexing-features.patch"
+  "../../patches/0007-implement-draw-indirect.patch"
+  "../../patches/0008-vk-ext-descriptor-indexing.patch"
   "terakan.conf"
   "terakan-vulkan-setup"
   "terakan-dx-setup"
@@ -55,11 +57,13 @@ sha256sums=(
   '83aab2832bd7b86f52e6c08f15d728791b66b58d97d7ff6339ae9f01644f2e41'
   '2ddc54b476a657c4c16505867de20a3d73778283e57bccb3aec84ebbd745d33a'
   '6bebe5e347775d58f13051a8a2b06d0cb1efbc7d5df721aff804ebc13504fe06'
+  '87fac28d930a82146659c5eab2a66f0f7fca72bd32104eb4a8f171270d69d078'
+  '1c149618192e4bf5e43f70912ded699800ee77e9b66354648ef5a5381e02be4d'
   '3f7a429cc643ae1c50111f91656c3f6de0279e49a66e861110a768080dd9d652'
   '5fea9547b4bc130864805e3b64a797ebf1365d0196aee783e67dbcf442882c55'
   '5b66a14acad9b569f7c0ae64206b7f6482801ed1e462f6c5ba565de98b4f2cd8'
   'eab6c4da7930810dac9fbd9ada350d95a76a5d579613621561df11b35384fee7'
-  '54f9de177e1a06377c10af719c5ec09e98d96d665970814fa5af5a0af164322d'
+  'd27e184bcceade06ffd83580daa310c558db2a6d11a0695eda64f0666ca63e89'
 )
 
 # GCC 16 + glibc 2.42+: C-only; do not pass to C++ (invalid for g++).
@@ -135,6 +139,8 @@ prepare() {
   patch -Np1 -i ../0004-implement-cmd-blit-image2.patch
   patch -Np1 -i ../0005-implement-scaled-blit-image2.patch
   patch -Np1 -i ../0006-blit-batch-and-dynamic-indexing-features.patch
+  patch -Np1 -i ../0007-implement-draw-indirect.patch
+  patch -Np1 -i ../0008-vk-ext-descriptor-indexing.patch
 
   # Sanity check: required on glibc 2.42+ (C23 once_flag in stdlib.h).
   grep -q '#ifndef __once_flag_defined' src/c11/threads.h
