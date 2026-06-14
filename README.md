@@ -1,27 +1,32 @@
-# mesa-terakan-ai-development
+# mesa-terakan-mimo-development
 
-AI-assisted development fork of **Terakan** — the Vulkan (and r600 Gallium) driver for AMD TeraScale GPUs (R600–Northern Islands, HD 2000–7000, pre-GCN).
+Patch queue, scripts, and Arch Linux packaging for **Terakan** — the Vulkan driver for AMD TeraScale GPUs (R600–Northern Islands, HD 2000–7000, pre-GCN).
 
-This repository contains **patches**, **build scripts**, and **Arch Linux packaging** on top of upstream Mesa. It does not vendor the full Mesa tree (clone upstream separately).
+This repository does **not** vendor Mesa. Clone upstream separately or use the working tree at `/home/shipa/terakan-mesa-state-rework`.
+
+**Agent workflow:** see [AGENTS.md](AGENTS.md).
+
+**Parallel repo (Cursor/AI):** `/home/shipa/Projects/mesa-terakan-ai-development` — keep `patches/` in sync after merges.
 
 ## Upstream
 
 | Item | Value |
 |------|--------|
 | Project | [Mesa Terakan](https://gitlab.freedesktop.org/Triang3l/mesa) |
-| Branch | `Terakan_Backup_2026-06-10_2_Meta_MSAA` |
-| Original author | Vitaliy Triang3l Kuzmin |
+| Branch | [`Terakan_state_rework`](https://gitlab.freedesktop.org/Triang3l/mesa/-/tree/Terakan_state_rework) (`a5fc39658` and newer) |
+| Author | Vitaliy Triang3l Kuzmin |
 
-## Quick start (developer)
+## Quick start
 
 ```bash
-git clone https://github.com/YOUR_USER/mesa-terakan-ai-development.git
-git clone -b Terakan_Backup_2026-06-10_2_Meta_MSAA \
-  https://gitlab.freedesktop.org/Triang3l/mesa.git mesa
+git clone --branch Terakan_state_rework --single-branch \
+  https://gitlab.freedesktop.org/Triang3l/mesa.git /home/shipa/terakan-mesa-state-rework
 
-./scripts/apply-patches.sh mesa
+/home/shipa/Projects/mesa-terakan-mimo-development/scripts/apply-patches.sh \
+  /home/shipa/terakan-mesa-state-rework
 
-cd mesa
+cd /home/shipa/terakan-mesa-state-rework
+PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/share/pkgconfig \
 meson setup build-vulkan --prefix=/usr -Dvulkan-drivers=amd_terascale -Dgallium-drivers= ...
 meson compile -C build-vulkan
 ```
@@ -35,120 +40,64 @@ See [docs/BUILD.md](docs/BUILD.md) for full build instructions.
 | `0001-fix-c23.patch` | glibc 2.42+ / C23 `once_flag` compatibility |
 | `0002-fix-c23-pthread-casts.patch` | pthread cast fixes for GCC 16 |
 | `0003-bump-api-version-1.1.patch` | Vulkan API 1.1 |
-| `0004-implement-cmd-blit-image2.patch` | Basic `CmdBlitImage2` (1:1 via copy) |
-| `0005-implement-scaled-blit-image2.patch` | Scaled blit meta-shader |
-| `0006-blit-batch-and-dynamic-indexing-features.patch` | Blit batching/tiles + dynamic indexing features |
-| `0007-implement-draw-indirect.patch` | `CmdDrawIndirect*` + `multiDrawIndirect` |
-| `0008-vk-ext-descriptor-indexing.patch` | `VK_EXT_descriptor_indexing` (update-after-bind, partially bound) |
-| `0009-fix-scaled-blit-stability.patch` | Scaled blit stability: R8xx `MULADD_IEEE` PS fix, Palm sampler/barrier workarounds |
+| `0004-implement-cmd-blit-image2.patch` | Blit meta, batching, STK stability, draw indirect, `VK_EXT_descriptor_indexing` (former 0005–0009) |
+| `0010-compute-mvp.patch` | Compute MVP + barriers, SFN kcache redirect, stride/VI fixes, CB UAV guard for CS |
+
+Patches **0005–0009** were merged into **0004** on the `Terakan_state_rework` rebase (2026-06).
+
+**Port status:** [docs/PORTING.md](docs/PORTING.md).
+
+## Current status (Palm, R8xx)
+
+| Test | Result |
+|------|--------|
+| `terakan-test-compute` | ✅ PASS `{1,2,3,4}` |
+| `vkcube` | ✅ |
+| `vkgears` | ✅ |
+| vkQuake3 (Vulkan) | ⚠️ runs; **multi_texture horizontal stripes** (single_texture OK) |
+| SuperTuxKart (Vulkan) | ⚠️ runs; **wheels collapsed, textures torn** |
+
+**Investigation progress:**
+- `vkCmdCopyBufferToImage`: ✅ works — root cause was `layerCount=0` in test (sanitize fails); ioquake3 correctly uses `layerCount=1`
+- VTX fetch format: ✅ **identical** for single/multi_texture (`0x07961000` = `FLOAT_32_32`, `DST_SEL=X,Y,0,1`)
+- Resource descriptors: ✅ all 4 bindings correct (VA, stride=16/4/8/8, size)
+- Descriptor sets: ✅ set 0=diffuse, set 1=lightmap bound correctly
+- **Next hypothesis:** SPI_VS_OUT_ID / SPI_PS_INPUT_CNTL `spi_sid` mismatch between VS and FS for multi_texture
 
 ## Vulkan API status
 
-Полная матрица: **[docs/VULKAN_STATUS.md](docs/VULKAN_STATUS.md)** (проверено по исходникам Terakan + патчи 0001–0009).
+Full matrix: **[docs/VULKAN_STATUS.md](docs/VULKAN_STATUS.md)**.
 
-**Приоритеты:** **P0** — обязательно для базового 3D+WSI · **P1** — игры/STK · **P2** — полезно · **P3** — опционально / лимит железа.
+| P | Area | Status |
+|---|------|--------|
+| P0 | Core 3D, WSI, descriptors, barriers | ✅ |
+| P1 | Draw indirect, descriptor indexing, blit/copy/clear | ✅ (R8xx scaled blit ⚠️) |
+| P1 | Compute MVP (SSBO write) | ✅ patch **0010** |
+| P0 | Multi-binding vertex fetch (STK, vkQuake3) | ⚠️ in progress |
+| P2 | `CmdDrawIndirectCount`, resolve, pipeline cache, maintenance3 | ❌ TODO |
 
-**Слои:** **HW** — пакеты в IB · **common** — Mesa `vk_common` (состояние) · **meta** — внутренние shader-pass'ы.
+**Hardware limit:** **18 samplers per stage** — STK cannot bind 512 textures at once (uses fallback).
 
-| P | Область | Обязательность | Статус |
-|---|---------|----------------|--------|
-| P0 | Instance, device, memory, buffer, image | да | ✅ HW + common |
-| P0 | Graphics pipeline, shader module, layout | да | ✅ HW + common |
-| P0 | Dynamic rendering, draw, bind state | да | ✅ HW + common |
-| P0 | Descriptors, barriers, WSI, sync | да | ✅ HW + common |
-| P1 | Draw indirect, descriptor indexing | STK | ✅ patches 0007–0008 |
-| P1 | Copy/blit/clear, BC textures, queries | игры | ✅ / blit ✅ (0009) |
-| P1 | `shaderDrawParameters` | STK/DXVK | ✅ |
-| P2 | Legacy render pass | редко | ⚠️ state only → use dynamic rendering |
-| P2 | Compute dispatch | compute-игры | ❌ |
-| P2 | Resolve, pipeline cache, `DrawIndirectCount` | — | ❌ TODO |
-| P3 | GS/TS, wide lines, RT/mesh | — | ❌ |
-| P3 | 512 samplers «at once» (STK ideal) | perf | 🚫 **18/stage** |
-
-**Command buffer:** 25 `Cmd*` с GPU-путём Terakan (draw, transfer, barrier, query, dynamic rendering); ещё ~245 через `vk_common` (viewport, scissor, bind pipeline, dynamic state и т.д.).
-
-**STK:** indexing + indirect ✅; bind 512 textures at once 🚫 (fallback на rebinding).
-
-## Vulkan 1.1 compatibility
-
-Terakan заявляет **Vulkan 1.1** (`TERAKAN_API_VERSION`). Драйвер **не conformant** (в логе: *testing use only*). Ниже — пробелы относительно **полной** спецификации 1.1 (не 1.2/1.3, без RT/mesh).
-
-### Уже закрыто (1.0 + promoted 1.1)
-
-| Область | Статус |
-|---------|--------|
-| Graphics pipeline, dynamic rendering, draw / indirect | ✅ |
-| Descriptors, push constants, `VK_EXT_descriptor_indexing` | ✅ |
-| Memory: `Bind*Memory2`, dedicated, `map_memory2`, external fd/dma-buf | ✅ |
-| `GetPhysicalDevice*2`, `GetDeviceQueue2`, `TrimCommandPool` | ✅ |
-| Descriptor update template | ✅ (`vk_common`) |
-| Barriers, copy / clear / blit, queries, WSI, timeline semaphore | ✅ (blit на R8xx ⚠️) |
-
-**Оценка:** ~**80–85%** entrypoint'ов 1.1 **вызываются** (terakan + `vk_common`); ~**75%** имеют рабочий GPU-путь для типичного 3D.
-
-### Чего не хватает
-
-#### Команды без HW-пути (можно дописать)
-
-| API | Сейчас | Реализуемо? |
-|-----|--------|-------------|
-| `CmdDispatch` / `Indirect`, `CreateComputePipelines` | объект есть, **CS не исполняется** | ✅ да (Evergreen compute; большой объём) |
-| `CmdClearDepthStencilImage` | stub / enqueue | ✅ да (meta, как color clear) |
-| `CmdResolveImage` | stub | ✅ да (MSAA resolve) |
-| `CmdDrawIndirectCount` / indexed variant | stub | ✅ да (indirect уже есть) |
-| `GetDescriptorSetLayoutSupport` | нет (`VK_KHR_maintenance3`) | ✅ да (валидация layout) |
-
-#### Optional features — не включены
-
-| Feature | Сейчас | Реализуемо? |
-|---------|--------|-------------|
-| `geometryShader` / `tessellationShader` | TODO | ⚠️ частично (NI HW; много работы) |
-| `sampleRateShading`, clip/cull distance | TODO | ⚠️ да |
-| `wideLines` / `largePoints` | TODO | ⚠️ ограниченно |
-| `shaderFloat64` | TODO | 🚫 практически нет на TeraScale |
-| `vertexPipelineStoresAndAtomics` (apps) | false | 🚫 мало UAV slots |
-
-#### Расширения экосистемы 1.1 — не включены
-
-| Extension | Сейчас | Реализуемо? |
-|-----------|--------|-------------|
-| `VK_KHR_maintenance3` | TODO | ✅ да |
-| `VK_KHR_multiview` | нет | ⚠️ возможно |
-| `VK_KHR_sampler_ycbcr_conversion` | нет | ⚠️ да (большой объём) |
-| `VK_KHR_protected_memory` | нет | 🚫 нет на старом Radeon |
-| `VK_KHR_device_group` | stub | 🚫 не приоритет (одна GPU) |
-| Sparse binding / residency | нет | 🚫 практически нет |
-
-#### Conformance / инфраструктура
-
-| Что | Сейчас | Реализуемо? |
-|-----|--------|-------------|
-| Pipeline cache UUID | TODO | ✅ да |
-| `driverVersion` conformant | заглушка | ✅ да |
-| Khronos CTS 1.1 | нет | ⚠️ после compute + gaps |
-
-### Сводка по покрытию 1.1
-
-| Срез | Покрытие |
-|------|----------|
-| Core API 1.1 (вызовы не падают) | ~**80–85%** |
-| Core + optional features (все биты spec) | ~**55–65%** |
-| GPU-исполнение заявленного 1.1 | ~**70–75%** |
-| Khronos conformance 1.1 | **0%** (testing only) |
-
-**Итог:** для STK / DXVK-lite хватает заявленного; для **формальной полноты 1.1** главные блокеры — **compute**, **`Cmd*IndirectCount`**, **depth clear / resolve**, **maintenance3**.
-
-## Testing (safe, no heavy apps)
+## Testing
 
 ```bash
-terakan-vulkan-setup vkgears
-terakan-test-capabilities   # after install from package
+# After deploy to Palm /tmp/terakan-deploy/
+export VK_ICD_FILENAMES=/tmp/terakan-deploy/terascale_icd.json
+
+terakan-test-capabilities   # vkcube, vkgears, vulkaninfo
+/tmp/terakan-deploy/terakan-test-compute   # expect PASS
+
+# Build compute test locally
+cc -O2 -o terakan-test-compute scripts/terakan-test-compute.c -lvulkan
 ```
+
+Details and Palm deploy: [AGENTS.md](AGENTS.md) §4–5.
 
 ## Arch Linux package
 
 ```bash
 cd packaging/archlinux
+for p in ../../patches/*.patch; do ln -f "$p" .; done
 makepkg -sf
 ```
 
@@ -156,7 +105,7 @@ See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) — blit stability, `CmdDrawIndirectCount`, pipeline cache, etc.
+[docs/ROADMAP.md](docs/ROADMAP.md) — vertex fetch (P0), then `CmdDrawIndirectCount`, pipeline cache, MSAA resolve, etc.
 
 ## License
 
