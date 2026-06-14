@@ -2,7 +2,7 @@
 
 Modified Terakan Vulkan driver source files and packaging for AMD TeraScale GPUs (R600–Northern Islands, HD 2000–7000, pre-GCN).
 
-Contains **modified Mesa source files** under `src/`, scripts, and Arch Linux packaging. Clone upstream Mesa separately or use the working tree at `/home/shipa/terakan-mesa-state-rework`.
+Contains **modified Mesa source files** under `src/`, scripts, and Arch Linux packaging.
 
 **Agent workflow:** see [AGENTS.md](AGENTS.md).
 
