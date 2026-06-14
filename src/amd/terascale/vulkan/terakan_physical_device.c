@@ -829,6 +829,9 @@ terakan_physical_device_get_capabilities(
    /* VK_KHR_maintenance3 (#169, Vulkan 1.1). */
    extensions_out->KHR_maintenance3 = true;
 
+   /* VK_KHR_external_semaphore — promoted 1.1 extension (type definitions only). */
+   extensions_out->KHR_external_semaphore = true;
+
    /* Vulkan 1.1 core properties. */
 
    /* SubgroupProperties. */
