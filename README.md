@@ -102,7 +102,7 @@ Place screenshot files in `screenshots/` directory. Current captures (2026-06):
 |------|--------|
 | Instance / Device / PhysicalDevice | ✅ |
 | Memory (allocate, map, bind, external fd/dma-buf, dedicated) | ✅ |
-| Buffer / Image / ImageView / Sampler | ✅ |
+| Buffer / Image /ImageView / Sampler | ✅ |
 | Graphics pipeline, shader module, layout | ✅ |
 | Dynamic rendering, draw, bind state | ✅ |
 | Descriptors, push constants, `VK_EXT_descriptor_indexing` | ✅ |
@@ -112,8 +112,13 @@ Place screenshot files in `screenshots/` directory. Current captures (2026-06):
 | Clear color / attachments | ✅ |
 | Queries (occlusion, timestamp) | ✅ |
 | `CmdDrawIndirect` + `CmdDrawIndexedIndirect` | ✅ |
+| `CmdDispatchBase` | ✅ non-zero base via `VGT_COMPUTE_START_*` |
 | `shaderDrawParameters` | ✅ |
 | Compute MVP (`CreateComputePipelines`, `CmdDispatch`, SSBO write) | ✅ |
+| `VK_KHR_maintenance3` + `GetDescriptorSetLayoutSupport` | ✅ |
+| `SubgroupProperties` | ✅ subgroupSize from wave_lanes, COMPUTE stage, BASIC ops |
+| `DriverProperties` | ✅ driverID=MESA_RADV, name=Terakan, conformance 1.1.0.0 |
+| `dualSrcBlend` | ✅ advertised |
 | WSI (swapchain, acquire/present) | ✅ |
 | Fence / Semaphore (incl. timeline) | ✅ |
 | `VK_KHR_dynamic_rendering` | ✅ |
@@ -148,11 +153,8 @@ Place screenshot files in `screenshots/` directory. Current captures (2026-06):
 | `vkCmdDrawIndexedIndirectCount` | P2 | Indexed indirect draw with GPU-side count | Medium — extend `CmdDrawIndexedIndirect` |
 | `vkCmdClearDepthStencilImage` | P2 | Clear depth/stencil via meta shader | Medium — similar to color clear |
 | `vkCmdResolveImage` / `vkCmdResolveImage2` | P2 | MSAA resolve | Medium — meta shader |
-| `vkCmdDispatchBase` | P2 | Compute dispatch with non-zero base | Small — `VGT_COMPUTE_START_*` |
-| `vkGetDescriptorSetLayoutSupport` | P2 | Descriptor set layout validation | Small — return standard limits |
 | `vkMergePipelineCaches` | P2 | Merge pipeline cache data | Small — serialize + merge |
 | `vkGetPipelineCacheData` | P2 | Export pipeline cache | Medium — dump shader bytecode |
-| `vkTrimCommandPool` | P2 | Return unused memory from pool | Small — `vk_common` handles |
 
 #### Core features not advertised
 
@@ -202,8 +204,8 @@ Place screenshot files in `screenshots/` directory. Current captures (2026-06):
 
 | Metric | Coverage |
 |--------|----------|
-| Core 1.1 entrypoints callable | ~80–85% |
-| Core 1.1 features advertised | ~65–75% |
+| Core 1.1 entrypoints callable | ~85–90% |
+| Core 1.1 features advertised | ~70–80% |
 | GPU execution path for typical 3D | ~75–80% |
 | Khronos CTS 1.1 conformance | 0% |
 
