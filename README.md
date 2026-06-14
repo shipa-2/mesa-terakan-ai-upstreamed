@@ -1,12 +1,10 @@
 # mesa-terakan-mimo-development
 
-Patch queue, scripts, and Arch Linux packaging for **Terakan** — the Vulkan driver for AMD TeraScale GPUs (R600–Northern Islands, HD 2000–7000, pre-GCN).
+Modified Terakan Vulkan driver source files and packaging for AMD TeraScale GPUs (R600–Northern Islands, HD 2000–7000, pre-GCN).
 
-This repository does **not** vendor Mesa. Clone upstream separately or use the working tree at `/home/shipa/terakan-mesa-state-rework`.
+Contains **modified Mesa source files** under `src/`, scripts, and Arch Linux packaging. Clone upstream Mesa separately or use the working tree at `/home/shipa/terakan-mesa-state-rework`.
 
 **Agent workflow:** see [AGENTS.md](AGENTS.md).
-
-**Parallel repo (Cursor/AI):** `/home/shipa/Projects/mesa-terakan-ai-development` — keep `patches/` in sync after merges.
 
 ## Upstream
 
@@ -22,30 +20,26 @@ This repository does **not** vendor Mesa. Clone upstream separately or use the w
 git clone --branch Terakan_state_rework --single-branch \
   https://gitlab.freedesktop.org/Triang3l/mesa.git /home/shipa/terakan-mesa-state-rework
 
-/home/shipa/Projects/mesa-terakan-mimo-development/scripts/apply-patches.sh \
-  /home/shipa/terakan-mesa-state-rework
+# Copy modified source files into the Mesa tree
+cp -r /home/shipa/Projects/mesa-terakan-mimo-development/src/* \
+  /home/shipa/terakan-mesa-state-rework/src/
 
 cd /home/shipa/terakan-mesa-state-rework
-PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/share/pkgconfig \
 meson setup build-vulkan --prefix=/usr -Dvulkan-drivers=amd_terascale -Dgallium-drivers= ...
 meson compile -C build-vulkan
 ```
 
 See [docs/BUILD.md](docs/BUILD.md) for full build instructions.
 
-## Patches (apply in order)
+## Modified source files
 
-| Patch | Description |
-|-------|-------------|
-| `0001-fix-c23.patch` | glibc 2.42+ / C23 `once_flag` compatibility |
-| `0002-fix-c23-pthread-casts.patch` | pthread cast fixes for GCC 16 |
-| `0003-bump-api-version-1.1.patch` | Vulkan API 1.1 |
-| `0004-implement-cmd-blit-image2.patch` | Blit meta, batching, STK stability, draw indirect, `VK_EXT_descriptor_indexing` (former 0005–0009) |
-| `0010-compute-mvp.patch` | Compute MVP + barriers, SFN kcache redirect, stride/VI fixes, CB UAV guard for CS |
-
-Patches **0005–0009** were merged into **0004** on the `Terakan_state_rework` rebase (2026-06).
-
-**Port status:** [docs/PORTING.md](docs/PORTING.md).
+| Directory | Description |
+|-----------|-------------|
+| `src/amd/terascale/vulkan/` | Vulkan driver: compute, blit, draw indirect, descriptor indexing, state management |
+| `src/amd/terascale/vulkan/meta/` | Meta shaders: blit image, copy buffer/image |
+| `src/c11/` | C23 compatibility (glibc 2.42+, GCC 16) |
+| `src/gallium/drivers/r600/` | SFN shader fixes |
+| `src/util/` | C11 monotonic condition variable fixes |
 
 ## Current status (Palm, R8xx)
 
@@ -91,13 +85,10 @@ terakan-test-capabilities   # vkcube, vkgears, vulkaninfo
 cc -O2 -o terakan-test-compute scripts/terakan-test-compute.c -lvulkan
 ```
 
-Details and Palm deploy: [AGENTS.md](AGENTS.md) §4–5.
-
 ## Arch Linux package
 
 ```bash
 cd packaging/archlinux
-for p in ../../patches/*.patch; do ln -f "$p" .; done
 makepkg -sf
 ```
 

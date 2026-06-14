@@ -28,29 +28,17 @@
 
 Файлы **0005–0009** в `patches/` **удалены** намеренно.
 
-## Текущая схема патчей
+## Текущая структура
 
-| Patch | Содержимое |
-|-------|------------|
-| **0001** | C23 `once_flag` / `call_once` (glibc 2.42+) |
-| **0002** | pthread casts в `cnd_monotonic.c` (GCC 16) |
-| **0003** | Vulkan API 1.1 в `terakan_instance.h` |
-| **0004** | Blit meta (scaled + STK stability), batching, draw indirect, `VK_EXT_descriptor_indexing` — бывшие 0004–0009 |
-| **0010** | Compute MVP + barriers, SFN kcache redirect, stride/VI fixes, CB UAV guard, push constants layout |
+| Директория | Содержимое |
+|------------|------------|
+| `src/amd/terascale/vulkan/` | Vulkan driver: compute, blit, draw indirect, descriptor indexing, state management |
+| `src/amd/terascale/vulkan/meta/` | Meta shaders: blit image, copy buffer/image |
+| `src/c11/` | C23 compatibility fixes (glibc 2.42+, GCC 16) |
+| `src/gallium/drivers/r600/` | SFN shader fixes |
+| `src/util/` | C11 monotonic condition variable fixes |
 
-Патч **0010** накладывается **поверх 0004**. В upstream уже есть записи compute-файлов в `meson.build`; 0010 добавляет исходники и логику.
-
-### Файлы патча 0010
-
-| Файл | Назначение |
-|------|------------|
-| `terakan_vk_pipeline_compute.c/h` | `CreateComputePipelines`, bind CS |
-| `terakan_vk_dispatch.c` | `CmdDispatch`, `CmdDispatchIndirect` + barriers |
-| `terakan_hw_config_compute.c/h` | CS register packets |
-| `terakan_app_config_compute.c/h` | app-side CS state, UAV sync |
-| `terakan_command_buffer.c/h` | compute writer reset/init |
-
-Изменены также: `terakan_app_config_draw.c`, `terakan_hw_config_draw.c`, `terakan_shader.c`, `terakan_pipeline_layout.c`, `terakan_vk_pipeline_graphics.c`, `terakan_vk_state.c`, `terakan_vk_draw.c`, `terakan_push_constants.h`, `sfn_shader.cpp`, `r600_pipe.h`, `terakan_physical_device.c`.
+Исходники применяются через `cp -r src/* /path/to/mesa/src/`.
 
 ## Рабочая копия Mesa
 
@@ -60,18 +48,22 @@
 /home/shipa/terakan-mesa-state-rework
 ```
 
-После правок — `git diff > patches/0010-compute-mvp.patch` (или соответствующий патч). См. [AGENTS.md](../AGENTS.md) §3.
+После правок — копируйте изменённые файлы в репозиторий:
+```bash
+cp /home/shipa/terakan-mesa-state-rework/src/amd/terascale/vulkan/*.c \
+   /home/shipa/Projects/mesa-terakan-mimo-development/src/amd/terascale/vulkan/
+```
 
-## Проверка после клона
+## Проверка после копирования
 
 ```bash
 git clone -b Terakan_state_rework --single-branch \
   https://gitlab.freedesktop.org/Triang3l/mesa.git /home/shipa/terakan-mesa-state-rework
 
-./scripts/apply-patches.sh /home/shipa/terakan-mesa-state-rework
+cp -r /home/shipa/Projects/mesa-terakan-mimo-development/src/* \
+  /home/shipa/terakan-mesa-state-rework/src/
 
 cd /home/shipa/terakan-mesa-state-rework
-PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/share/pkgconfig \
 meson setup build-vulkan ... && meson compile -C build-vulkan
 ```
 

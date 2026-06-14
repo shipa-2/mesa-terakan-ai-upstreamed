@@ -1,0 +1,1347 @@
+/*
+ * Copyright © 2024 Vitaliy Triang3l Kuzmin
+ *
+ * Based in part on radv_physical_device.c which is:
+ * Copyright © 2016 Red Hat.
+ * Copyright © 2016 Bas Nieuwenhuizen
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+
+#include "terakan_physical_device.h"
+
+#include "terakan_descriptor.h"
+#include "terakan_entrypoints.h"
+#include "terakan_hw_config_draw.h"
+#include "terakan_image.h"
+#include "terakan_instance.h"
+#include "terakan_limits.h"
+#include "terakan_push_constants.h"
+#include "terakan_vertex_input.h"
+#include "terakan_vk_state.h"
+#include "terakan_wsi.h"
+
+#include "compiler/shader_enums.h"
+#include "gallium/drivers/r600/evergreend.h"
+#include "gallium/drivers/r600/r600_isa.h"
+#include "gallium/drivers/r600/sfn/sfn_nir.h"
+#include "util/macros.h"
+#include "util/u_math.h"
+#include "vk_alloc.h"
+#include "vk_device.h"
+#include "vk_extensions.h"
+#include "vk_log.h"
+#include "vk_util.h"
+#include "wsi_common.h"
+
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+enum radeon_family
+terakan_physical_device_get_chip_family(uint32_t const pci_device_id)
+{
+   /* CHIP_UNKNOWN is not an error, as this function is used in filtering out unsupported physical
+    * devices.
+    */
+   enum radeon_family chip_family = CHIP_UNKNOWN;
+   switch (pci_device_id) {
+#define CHIPSET(chipset_pci_id, chipset_name, chipset_family)                                      \
+   case chipset_pci_id:                                                                            \
+      chip_family = CHIP_##chipset_family;                                                         \
+      break;
+#include "pci_ids/r600_pci_ids.h"
+#undef CHIPSET
+   }
+   return chip_family;
+}
+
+char const *
+terakan_physical_device_chip_family_name(enum radeon_family const chip_family)
+{
+   switch (chip_family) {
+   case CHIP_CEDAR:
+      return "Cedar";
+   case CHIP_REDWOOD:
+      return "Redwood";
+   case CHIP_JUNIPER:
+      return "Juniper";
+   case CHIP_CYPRESS:
+      return "Cypress";
+   case CHIP_HEMLOCK:
+      return "Hemlock";
+   case CHIP_PALM:
+      return "Palm";
+   /* sumo_id.h DEVICE_ID_SUMO_SUPER_* correspond to CHIP_SUMO, non-SUPER are CHIP_SUMO2.
+    * SUMO also has more SIMDs, render backends and contexts.
+    */
+   case CHIP_SUMO:
+      return "SuperSumo";
+   case CHIP_SUMO2:
+      return "Sumo";
+   case CHIP_BARTS:
+      return "Barts";
+   case CHIP_TURKS:
+      return "Turks";
+   case CHIP_CAICOS:
+      return "Caicos";
+   case CHIP_CAYMAN:
+      return "Cayman";
+   case CHIP_ARUBA:
+      return "Aruba";
+   default:
+      assert(!"Unsupported GFX chip family");
+      return "Evergreen/Northern Islands";
+   }
+}
+
+void
+terakan_physical_device_chip_info_init(
+   uint32_t const pci_device_id, struct terakan_physical_device_chip_info * const chip_info_out)
+{
+   enum radeon_family const chip_family = terakan_physical_device_get_chip_family(pci_device_id);
+   assert(terakan_physical_device_is_chip_family_supported(chip_family));
+
+   chip_info_out->pci_device_id = pci_device_id;
+   chip_info_out->chip_family = chip_family;
+   bool const is_r9xx = chip_family >= CHIP_CAYMAN;
+   chip_info_out->is_r9xx = is_r9xx;
+
+   switch (chip_family) {
+   case CHIP_PALM:
+   case CHIP_SUMO:
+   case CHIP_SUMO2:
+   case CHIP_ARUBA:
+      chip_info_out->has_dedicated_vram = false;
+      break;
+   default:
+      chip_info_out->has_dedicated_vram = true;
+   }
+
+   switch (chip_family) {
+   case CHIP_CEDAR:
+   case CHIP_PALM:
+   case CHIP_SUMO:
+   case CHIP_SUMO2:
+   case CHIP_CAICOS:
+      chip_info_out->has_vertex_cache = false;
+      break;
+   default:
+      /* R9xx vertex fetch always goes through the texture cache, but DRM Radeon 2.50.0 and the
+       * Gallium R600 driver set SQ_CONFIG.VC_ENABLE to 1 on it.
+       */
+      chip_info_out->has_vertex_cache = true;
+   }
+
+   switch (chip_family) {
+   case CHIP_CYPRESS:
+   case CHIP_HEMLOCK:
+   case CHIP_BARTS:
+   case CHIP_CAYMAN:
+      chip_info_out->two_shader_engines_max = true;
+      break;
+   default:
+      chip_info_out->two_shader_engines_max = false;
+   }
+
+   /* Thread allocation granularity is 8 according to the Evergreen 3D Register Reference Guide. */
+   memset(&chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx, 0,
+          sizeof(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx));
+   if (is_r9xx) {
+      chip_info_out->sq_max_threads_shr3 = 256 >> 3;
+   } else {
+      bool const is_sumo = chip_family == CHIP_SUMO || chip_family == CHIP_SUMO2;
+
+      uint32_t sq_ps_threads_shr3;
+      uint32_t sq_max_gs_threads_shr3;
+      if (chip_family == CHIP_CEDAR || chip_family == CHIP_PALM || chip_family == CHIP_CAICOS) {
+         chip_info_out->sq_max_threads_shr3 = 192 >> 3;
+         sq_ps_threads_shr3 = 96 >> 3;
+         sq_max_gs_threads_shr3 = 16 >> 3;
+      } else {
+         chip_info_out->sq_max_threads_shr3 = 248 >> 3;
+         /* TODO(Triang3l): This way, when rendering with VS only, CHIP_SUMO and CHIP_SUMO2 receive
+          * more VS threads than PS threads, which may be suboptimal. However, both DRM Radeon
+          * 2.50.0 and R600g at the time of writing allocate 96 threads to PS rather than 128 for
+          * those chips. Research if using the same allocation as on other chips with 4 quad pipes
+          * is fine.
+          */
+         sq_ps_threads_shr3 = (is_sumo ? 96 : 128) >> 3;
+         sq_max_gs_threads_shr3 = 32 >> 3;
+      }
+
+      for (unsigned ts_enabled = 0; ts_enabled < 2; ++ts_enabled) {
+         for (unsigned gs_enabled = 0; gs_enabled < 2; ++gs_enabled) {
+            chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[ts_enabled][gs_enabled][0] |=
+               S_008C18_NUM_PS_THREADS(sq_ps_threads_shr3 << 3);
+         }
+      }
+
+      uint32_t const sq_non_ps_threads_shr3 =
+         chip_info_out->sq_max_threads_shr3 - sq_ps_threads_shr3;
+
+      uint32_t const sq_gs_threads_no_ts_shr3 =
+         MIN2(sq_non_ps_threads_shr3 / 3, sq_max_gs_threads_shr3);
+      chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][1][0] |=
+         S_008C18_NUM_VS_THREADS(((sq_non_ps_threads_shr3 - sq_gs_threads_no_ts_shr3) / 2) << 3) |
+         S_008C18_NUM_GS_THREADS(sq_gs_threads_no_ts_shr3 << 3);
+
+      uint32_t sq_ls_hs_threads_no_gs_shr3;
+      uint32_t sq_ls_hs_threads_with_gs_shr3;
+      uint32_t sq_gs_threads_with_ts_shr3;
+      if (is_sumo) {
+         /* Allocate more threads to post-tessellation stages.
+          * LS and HS get the same amount as on other chips with 4 quad pipes, the rest are
+          * distributed evenly.
+          * This is different from R600g at the time of writing, but R600g allocates only 16 threads
+          * to each pre-tessellation stage (like on chips with 2 quad pipes) and 24 threads to each
+          * post-tessellation one, only resulting in 200 out of 248 threads being utilized.
+          */
+         sq_ls_hs_threads_no_gs_shr3 = 40 >> 3;
+         sq_ls_hs_threads_with_gs_shr3 = 24 >> 3;
+         sq_gs_threads_with_ts_shr3 =
+            MIN2((sq_non_ps_threads_shr3 - sq_ls_hs_threads_with_gs_shr3 * 2) / 3,
+                 sq_max_gs_threads_shr3);
+      } else {
+         /* Distribute threads evenly between vertex stages. */
+         sq_ls_hs_threads_no_gs_shr3 = sq_non_ps_threads_shr3 / 3;
+         sq_gs_threads_with_ts_shr3 = MIN2(sq_non_ps_threads_shr3 / 5, sq_max_gs_threads_shr3);
+         sq_ls_hs_threads_with_gs_shr3 = (sq_non_ps_threads_shr3 - sq_gs_threads_with_ts_shr3) / 4;
+      }
+
+      chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][0][1] |=
+         S_008C1C_NUM_HS_THREADS(sq_ls_hs_threads_no_gs_shr3 << 3) |
+         S_008C1C_NUM_LS_THREADS(sq_ls_hs_threads_no_gs_shr3 << 3);
+
+      chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][0] |=
+         S_008C18_NUM_VS_THREADS(((sq_non_ps_threads_shr3 - sq_ls_hs_threads_with_gs_shr3 * 2 -
+                                   sq_gs_threads_with_ts_shr3) /
+                                  2)
+                                 << 3) |
+         S_008C18_NUM_GS_THREADS(sq_gs_threads_with_ts_shr3 << 3);
+      chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][1] |=
+         S_008C1C_NUM_HS_THREADS(sq_ls_hs_threads_with_gs_shr3 << 3) |
+         S_008C1C_NUM_LS_THREADS(sq_ls_hs_threads_with_gs_shr3 << 3);
+
+      /* Allocate all threads not used for other stages (including for rounding error reasons) to
+       * the Vulkan vertex or tessellation evaluation stage.
+       */
+
+      uint32_t const sq_max_threads = chip_info_out->sq_max_threads_shr3 << 3;
+
+      uint32_t const sq_non_vs_threads_no_tess =
+         G_008C18_NUM_PS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][0][0]);
+      assert(sq_non_vs_threads_no_tess < sq_max_threads);
+      chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][0][0] |=
+         S_008C18_NUM_VS_THREADS(sq_max_threads - sq_non_vs_threads_no_tess);
+
+      uint32_t const sq_non_es_threads_no_tess =
+         G_008C18_NUM_PS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][1][0]) +
+         G_008C18_NUM_VS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][1][0]) +
+         G_008C18_NUM_GS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][1][0]);
+      assert(sq_non_es_threads_no_tess < sq_max_threads);
+      chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][1][0] |=
+         S_008C18_NUM_ES_THREADS(sq_max_threads - sq_non_es_threads_no_tess);
+
+      uint32_t const sq_non_vs_threads_with_tess =
+         G_008C18_NUM_PS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][0][0]) +
+         G_008C1C_NUM_HS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][0][1]) +
+         G_008C1C_NUM_LS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][0][1]);
+      assert(sq_non_vs_threads_with_tess < sq_max_threads);
+      chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][0][0] |=
+         S_008C18_NUM_VS_THREADS(sq_max_threads - sq_non_vs_threads_with_tess);
+
+      uint32_t const sq_non_es_threads_with_tess =
+         G_008C18_NUM_PS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][0]) +
+         G_008C18_NUM_VS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][0]) +
+         G_008C18_NUM_GS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][0]) +
+         G_008C1C_NUM_HS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][1]) +
+         G_008C1C_NUM_LS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][1]);
+      assert(sq_non_es_threads_with_tess < sq_max_threads);
+      chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][0] |=
+         S_008C18_NUM_ES_THREADS(sq_max_threads - sq_non_es_threads_with_tess);
+   }
+
+   switch (chip_family) {
+   case CHIP_CEDAR:
+   case CHIP_REDWOOD:
+   case CHIP_PALM:
+   case CHIP_SUMO:
+   case CHIP_TURKS:
+   case CHIP_CAICOS:
+      chip_info_out->sq_max_stack_entries = 256;
+      break;
+   default:
+      chip_info_out->sq_max_stack_entries = 512;
+   }
+
+   switch (chip_family) {
+   case CHIP_CEDAR:
+   case CHIP_PALM:
+      /* In the AMD Accelerated Parallel Processing OpenCL Programming Guide rev2.3 (July 2012)
+       * device parameters table, for Cedar and Ontario / Zacate (Wrestler, or Palm),
+       * Max Work-Items / GPU = 6144, Max Wavefronts / GPU = 192, therefore the wave size is 32.
+       */
+      chip_info_out->wave_lanes_log2 = 5;
+      break;
+   default:
+      /* For Caicos / Seymour, Max Work-Items / GPU = 12288, Max Wavefronts / GPU = 192. */
+      chip_info_out->wave_lanes_log2 = 6;
+   }
+
+   /* For simplicity, don't track `NUM_PS_THREADS` changes - as of this writing, it's set to the
+    * same value regardless of which pre-rasterization shader stages are used, but use the largest
+    * out of the used options to avoid an implicit dependency on this.
+    * R9xx doesn't have `SQ_THREAD_RESOURCE_MGMT`, use the maximum possible thread block count.
+    * All R6xx+ TeraScale GPUs have at least 16-lane wavefronts, so it's safe to assume that the
+    * scratch ring buffer size is a multiple of 256 bytes if the wavefront count is a multiple of 8.
+    */
+   chip_info_out->sq_pstmp_ring_bytes_per_item_dword_shr8 =
+      (chip_info_out->is_r9xx
+          ? 256 >> 3
+          : MAX4(
+               G_008C18_NUM_PS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][0][0]),
+               G_008C18_NUM_PS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[0][1][0]),
+               G_008C18_NUM_PS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][0][0]),
+               G_008C18_NUM_PS_THREADS(chip_info_out->sq_thread_resource_mgmt_ts_gs_r8xx[1][1][0])))
+      << (2 + chip_info_out->wave_lanes_log2 + 3 - 8);
+
+   /* A compute shader may occupy all the available threads. */
+   /* TODO(Triang3l): See how MBCNT behaves on wave32 chips and possibly scale the wave ID by 32
+    * there.
+    */
+   chip_info_out->uav_immediate_size_elements =
+      chip_info_out->sq_max_threads_shr3
+      << (3 + 6 + (unsigned)chip_info_out->two_shader_engines_max);
+
+   unsigned max_render_backends_per_se_log2;
+   switch (chip_family) {
+   case CHIP_REDWOOD:
+   case CHIP_SUMO:
+   case CHIP_TURKS:
+      max_render_backends_per_se_log2 = 1;
+      break;
+   case CHIP_CEDAR:
+   case CHIP_PALM:
+   case CHIP_SUMO2:
+   case CHIP_CAICOS:
+      max_render_backends_per_se_log2 = 0;
+      break;
+   case CHIP_ARUBA:
+      if ((pci_device_id >= 0x9990 && pci_device_id <= 0x999B && pci_device_id != 0x9999) ||
+          pci_device_id == 0x99A0 || pci_device_id == 0x99A2 || pci_device_id == 0x99A4) {
+         /* "Scrapper" chip family. */
+         max_render_backends_per_se_log2 = 0;
+      } else {
+         /* "Devastator" chip family. */
+         max_render_backends_per_se_log2 = 1;
+      }
+      break;
+   default:
+      max_render_backends_per_se_log2 = 2;
+   }
+   chip_info_out->max_render_backends_log2 =
+      max_render_backends_per_se_log2 + (unsigned)chip_info_out->two_shader_engines_max;
+}
+
+/* Winsys-specific extensions are not handled, they should be configured by the
+ * get_winsys_extensions winsys callback.
+ * deviceUUID is not set as well, expected to be configured by the winsys.
+ */
+static void
+terakan_physical_device_get_capabilities(
+   struct terakan_instance const * const instance,
+   struct terakan_physical_device_chip_info const * const chip_info,
+   unsigned const tile_pipe_interleave_bytes_log2, VkDeviceSize const min_memory_map_alignment,
+   uint32_t const clock_crystal_frequency_hz, VkDeviceSize const max_memory_allocation_size,
+   struct vk_device_extension_table * const extensions_out, struct vk_features * const features_out,
+   struct vk_properties * const properties_out)
+{
+   memset(extensions_out, 0, sizeof(*extensions_out));
+   memset(features_out, 0, sizeof(*features_out));
+   memset(properties_out, 0, sizeof(*properties_out));
+
+   /* Vulkan 1.0. */
+
+   /* Buffer resource bounds checking behavior on pre-R9xx hardware according to testing on Barts:
+    *
+    * For element sizes within 4 bytes, the entire element size must be in bounds for the data to be
+    * fetched. Otherwise, 0 is loaded into all channels.
+    *
+    * For element sizes larger than 4 bytes, however, only the first 4 bytes are checked, and if
+    * they're in bounds, the entire element is fetched (otherwise all channels receive 0).
+    * Therefore, if the size of the buffer is 3 bytes, a 32_32_32_32 fetch at offset 0 will return
+    * zeros, but if the buffer is 4 bytes large, all bytes [0, 15] will be loaded.
+    *
+    * This allows for vectorizing 32-bit uniform buffer and storage buffer loads freely without
+    * robustBufferAccess. However, this also makes it possible to read from beyond the memory range
+    * bound to the buffer, which is not allowed with robustBufferAccess.
+    *
+    * Section 46. "Features" of the Vulkan 1.3.292 specification says:
+    *
+    *     "If robustBufferAccess2 is enabled, vertex input attributes are considered out of bounds
+    *     if the offset of the attribute in the bound vertex buffer range plus the size of the
+    *     attribute is greater than the byte size of the memory range bound to the vertex buffer
+    *     binding.
+    *
+    *     If a vertex input attribute is out of bounds, the raw data extracted are zero values, and
+    *     missing G, B, or A components are filled with (0,0,1)."
+    *
+    * Thus, for vertex input, the bounds checking behavior for elements larger than 4 bytes must
+    * explicitly be taken into account with robustBufferAccess2 and even robustBufferAccess as
+    * out-of-bounds vertex input loads must not read from outside the memory range bound to the
+    * buffer. One approach is to subtract element size minus 4 from the size of the buffer.
+    *
+    * During a buffer resource fetch, the global address (which is the base address plus index times
+    * stride plus the offset from the fetch instruction) is implicitly rounded down to the alignment
+    * requirement of the element format: min(bytes per element, 4), which matches the alignment
+    * restriction for structures like vertices described in "4.4.6 Element Alignment" of the
+    * Direct3D 11.3 Functional Specification. (Non-power-of-two element sizes below 4 aren't
+    * important because during testing on Barts, 8_8_8 and 16_16_16 buffer fetches produced
+    * completely invalid values.)
+    *
+    * Bounds checking doesn't involve the base address from the buffer resource descriptor, only the
+    * index and offset part. Therefore, if the base address is misaligned, it's possible to read
+    * bytes that precede the base address. However, that doesn't permit reading from beyond the end
+    * of the [unaligned base, unaligned base + size) range, as long as elements are up to 4 bytes
+    * large.
+    *
+    * On R9xx, according to testing on Devastator, bounds checking is performed for the full element
+    * size, not just for up to the first 4 bytes.
+    */
+   features_out->robustBufferAccess = true;
+
+   /* fullDrawIndexUint32 is unconditionally used by meta shaders, primarily for 2D vertex positions
+    * packed in an immediate index buffer.
+    */
+   features_out->fullDrawIndexUint32 = true;
+   features_out->imageCubeArray = true;
+   features_out->independentBlend = true;
+   /* TODO(Triang3l): geometryShader. */
+   /* TODO(Triang3l): tessellationShader. */
+   /* TODO(Triang3l): sampleRateShading. */
+   features_out->dualSrcBlend = true;
+   features_out->logicOp = true;
+   features_out->multiDrawIndirect = true;
+   features_out->drawIndirectFirstInstance = true;
+   features_out->depthClamp = true;
+   features_out->depthBiasClamp = true;
+   features_out->fillModeNonSolid = true;
+   /* TODO(Triang3l): wideLines. */
+   /* TODO(Triang3l): largePoints. */
+   /* TODO(Triang3l): alphaToOne. */
+   features_out->multiViewport = true;
+   features_out->samplerAnisotropy = true;
+   features_out->textureCompressionBC = true;
+   features_out->occlusionQueryPrecise = true;
+   features_out->pipelineStatisticsQuery = true;
+   /* vertexPipelineStoresAndAtomics are unconditionally used by meta shaders, primarily for query
+    * operations, but can't be provided to applications because of the very small UAV binding count
+    * limit in the hardware.
+    */
+   /* fragmentStoresAndAtomics are unconditionally used by meta shaders, primarily for transfers to
+    * buffers or to 3x-expanded images.
+    */
+   features_out->fragmentStoresAndAtomics = true;
+   /* TODO(Triang3l): shaderTessellationAndGeometryPointSize. */
+   /* TODO(Triang3l): Possibly shaderImageGatherExtended. */
+   /* TODO(Triang3l): Shader storage image format features. */
+   /* Shader binding array dynamic indexing is implemented in `terakan_nir_lower_bindings`. */
+   features_out->shaderUniformBufferArrayDynamicIndexing = true;
+   features_out->shaderSampledImageArrayDynamicIndexing = true;
+   features_out->shaderStorageBufferArrayDynamicIndexing = true;
+   features_out->shaderStorageImageArrayDynamicIndexing = true;
+   /* TODO(Triang3l): shaderClipDistance. */
+   /* TODO(Triang3l): shaderCullDistance. */
+   /* TODO(Triang3l): shaderFloat64. */
+   /* TODO(Triang3l): shaderResourceMinLod. */
+   /* TODO(Triang3l): variableMultisampleRate. */
+   features_out->inheritedQueries = true;
+   features_out->shaderDrawParameters = true;
+
+   properties_out->apiVersion = TERAKAN_API_VERSION;
+   /* TODO(Triang3l): Change to vk_get_driver_version() when Vulkan 1.0 compatibility is achieved.
+    */
+   properties_out->driverVersion = VK_MAKE_API_VERSION(0, 0, 0, 1);
+   properties_out->vendorID = TERAKAN_PHYSICAL_DEVICE_VENDOR_ID_ATI;
+   properties_out->deviceID = chip_info->pci_device_id;
+   properties_out->deviceType = chip_info->has_dedicated_vram
+                                   ? VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+                                   : VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+   snprintf(properties_out->deviceName, sizeof(properties_out->deviceName),
+            "AMD R%cxx %s (Terakan)", chip_info->is_r9xx ? '9' : '8',
+            terakan_physical_device_chip_family_name(chip_info->chip_family));
+   /* TODO(Triang3l): pipelineCacheUUID when pipeline cache is implemented. */
+
+   properties_out->maxImageDimension1D = TERAKAN_IMAGE_MAX_WIDTH_HEIGHT;
+   properties_out->maxImageDimension2D = TERAKAN_IMAGE_MAX_WIDTH_HEIGHT;
+   properties_out->maxImageDimension3D = TERAKAN_IMAGE_MAX_TARGET_SLICES;
+   properties_out->maxImageDimensionCube = TERAKAN_IMAGE_MAX_WIDTH_HEIGHT;
+   properties_out->maxImageArrayLayers = TERAKAN_IMAGE_MAX_TARGET_SLICES;
+
+   /* Vertex fetch constants have 32-bit size minus one in bytes, so the theoretical maximum element
+    * count depends on the element size. But instead of exposing the worst case value, letting
+    * maxMemoryAllocationSize impose that limitation instead, which as of this writing never exceeds
+    * UINT32_MAX (also rounded down to the pipe interleave so the maximum valid size still makes it
+    * possible to provide the padding for UAV alignment base offsetting).
+    *
+    * If texel buffers were accessed with `uint` coordinates, the actual limit would match
+    * `maxStorageBufferRange`. That is sufficient for element index clamping for robust buffer
+    * access with `buffer_uav_validated_as_image`, there's no need to set a lower limit to handle
+    * that UAVs with large element sizes have a base address granularity larger than the pipe
+    * interleave. That's because shaders add the sub-granularity base offset passed in elements, not
+    * in bytes. So, with 256-byte pipe interleave, the maximum sub-granularity base offset will be
+    * 255 - for 1 byte per element. With 8 or 16 bytes per element, the base granularity is 512 or
+    * 1024 bytes respectively (due to the requirement that the pitch must be aligned to 64 elements
+    * for LINEAR_ALIGNED), however, because the sub-granularity base offset is passed in elements,
+    * it will not exceed 63.
+    *
+    * However, texel buffers are accessed in shaders with coordinates being 32-bit signed integers,
+    * so coordinates starting from 2^31 must be considered out of bounds as they are negative.
+    * textureSize also returns a signed integer, hence 2^31-1 rather than 2^31.
+    */
+   properties_out->maxTexelBufferElements = INT32_MAX;
+
+   properties_out->maxUniformBufferRange = TERAKAN_KCACHE_HW_MAX_BUFFER_SIZE_BYTES;
+
+   /* Buffer UAVs have LINEAR_ALIGNED array mode, and thus alignment equal to the pipe interleave,
+    * with the offset (in element units) applied in shaders. Adding the offset may result in
+    * out-of-bounds index values near UINT32_MAX wrapping and becoming valid indices near 0. Instead
+    * of comparing the index to the buffer size in shaders to implement robustness with the offset,
+    * the index value can be clamped to this maximum range as unsigned so that adding any alignment
+    * offset after the clamping won't cause wraparound.
+    *
+    * With `buffer_uav_validated_as_image`, the base address rounding and the offsetting in shaders
+    * are also performed to make sure a CB_COLOR with the smallest possible PITCH_TILE_MAX and
+    * SLICE_TILE_MAX for the element size is considered in bounds of the BO without adding too much
+    * BO size padding.
+    *
+    * Storage buffer UAVs have 32-bit elements, and thus the pipe interleave divided by the element
+    * size is at least 64, so the pitch never needs to be overaligned, therefore no need to handle
+    * `buffer_uav_validated_as_image`.
+    */
+   properties_out->maxStorageBufferRange = ~(((uint32_t)1 << tile_pipe_interleave_bytes_log2) - 1);
+
+   properties_out->maxPushConstantsSize = TERAKAN_PUSH_CONSTANTS_APP_SIZE_BYTES;
+
+   properties_out->maxMemoryAllocationCount = UINT32_MAX;
+
+   properties_out->maxSamplerAllocationCount = UINT32_MAX;
+
+   properties_out->bufferImageGranularity = 1;
+
+   properties_out->maxPerStageDescriptorSamplers = TERAKAN_SAMPLER_HW_COUNT_PER_STAGE;
+   properties_out->maxPerStageDescriptorUniformBuffers = instance->max_per_stage_uniform_buffers;
+   properties_out->maxPerStageDescriptorStorageBuffers = instance->max_per_stage_storage_buffers;
+   properties_out->maxPerStageDescriptorSampledImages = instance->max_per_stage_sampled_images;
+   properties_out->maxPerStageDescriptorStorageImages =
+      TERAKAN_COLOR_HW_RTV_AND_UAV_COUNT - instance->max_per_stage_storage_buffers;
+   properties_out->maxPerStageDescriptorInputAttachments =
+      instance->max_per_stage_input_attachments;
+   properties_out->maxColorAttachments = TERAKAN_VK_STATE_MAX_COLOR_ATTACHMENTS;
+
+   properties_out->maxPerStageResources = properties_out->maxPerStageDescriptorUniformBuffers +
+                                          properties_out->maxPerStageDescriptorStorageBuffers +
+                                          properties_out->maxPerStageDescriptorSampledImages +
+                                          properties_out->maxPerStageDescriptorStorageImages +
+                                          properties_out->maxPerStageDescriptorInputAttachments +
+                                          properties_out->maxColorAttachments;
+
+   properties_out->maxDescriptorSetSamplers =
+      properties_out->maxPerStageDescriptorSamplers * MESA_SHADER_STAGES;
+   properties_out->maxDescriptorSetUniformBuffers =
+      properties_out->maxPerStageDescriptorUniformBuffers * MESA_SHADER_STAGES;
+   properties_out->maxDescriptorSetUniformBuffersDynamic =
+      properties_out->maxDescriptorSetUniformBuffers;
+   properties_out->maxDescriptorSetStorageBuffers =
+      properties_out->maxPerStageDescriptorStorageBuffers * MESA_SHADER_STAGES;
+   properties_out->maxDescriptorSetStorageBuffersDynamic =
+      properties_out->maxDescriptorSetStorageBuffers;
+   properties_out->maxDescriptorSetSampledImages =
+      properties_out->maxPerStageDescriptorSampledImages * MESA_SHADER_STAGES;
+   properties_out->maxDescriptorSetStorageImages =
+      properties_out->maxPerStageDescriptorStorageImages * MESA_SHADER_STAGES;
+   properties_out->maxDescriptorSetInputAttachments =
+      properties_out->maxPerStageDescriptorInputAttachments;
+
+   /* VK_EXT_descriptor_indexing: dynamic/non-uniform binding arrays are lowered in
+    * `terakan_nir_lower_bindings`; partially bound descriptors skip unbound slots at bind time.
+    */
+   extensions_out->EXT_descriptor_indexing = true;
+
+   features_out->shaderInputAttachmentArrayDynamicIndexing = true;
+   features_out->shaderUniformTexelBufferArrayDynamicIndexing = true;
+   features_out->shaderStorageTexelBufferArrayDynamicIndexing = true;
+   features_out->shaderUniformBufferArrayNonUniformIndexing = true;
+   features_out->shaderSampledImageArrayNonUniformIndexing = true;
+   features_out->shaderStorageBufferArrayNonUniformIndexing = true;
+   features_out->shaderStorageImageArrayNonUniformIndexing = true;
+   features_out->shaderInputAttachmentArrayNonUniformIndexing = true;
+   features_out->shaderUniformTexelBufferArrayNonUniformIndexing = true;
+   features_out->shaderStorageTexelBufferArrayNonUniformIndexing = true;
+   features_out->descriptorBindingUniformBufferUpdateAfterBind = true;
+   features_out->descriptorBindingSampledImageUpdateAfterBind = true;
+   features_out->descriptorBindingStorageImageUpdateAfterBind = true;
+   features_out->descriptorBindingStorageBufferUpdateAfterBind = true;
+   features_out->descriptorBindingUniformTexelBufferUpdateAfterBind = true;
+   features_out->descriptorBindingStorageTexelBufferUpdateAfterBind = true;
+   features_out->descriptorBindingUpdateUnusedWhilePending = true;
+   features_out->descriptorBindingPartiallyBound = true;
+   features_out->descriptorBindingVariableDescriptorCount = true;
+   features_out->runtimeDescriptorArray = true;
+
+   properties_out->maxUpdateAfterBindDescriptorsInAllPools = UINT32_MAX;
+   properties_out->robustBufferAccessUpdateAfterBind = true;
+
+   properties_out->maxPerStageDescriptorUpdateAfterBindSamplers =
+      properties_out->maxPerStageDescriptorSamplers;
+   properties_out->maxPerStageDescriptorUpdateAfterBindUniformBuffers =
+      properties_out->maxPerStageDescriptorUniformBuffers;
+   properties_out->maxPerStageDescriptorUpdateAfterBindStorageBuffers =
+      properties_out->maxPerStageDescriptorStorageBuffers;
+   properties_out->maxPerStageDescriptorUpdateAfterBindSampledImages =
+      properties_out->maxPerStageDescriptorSampledImages;
+   properties_out->maxPerStageDescriptorUpdateAfterBindStorageImages =
+      properties_out->maxPerStageDescriptorStorageImages;
+   properties_out->maxPerStageDescriptorUpdateAfterBindInputAttachments =
+      properties_out->maxPerStageDescriptorInputAttachments;
+   properties_out->maxPerStageUpdateAfterBindResources = properties_out->maxPerStageResources;
+
+   properties_out->maxDescriptorSetUpdateAfterBindSamplers =
+      properties_out->maxDescriptorSetSamplers;
+   properties_out->maxDescriptorSetUpdateAfterBindUniformBuffers =
+      properties_out->maxDescriptorSetUniformBuffers;
+   properties_out->maxDescriptorSetUpdateAfterBindUniformBuffersDynamic =
+      properties_out->maxDescriptorSetUniformBuffersDynamic;
+   properties_out->maxDescriptorSetUpdateAfterBindStorageBuffers =
+      properties_out->maxDescriptorSetStorageBuffers;
+   properties_out->maxDescriptorSetUpdateAfterBindStorageBuffersDynamic =
+      properties_out->maxDescriptorSetStorageBuffersDynamic;
+   properties_out->maxDescriptorSetUpdateAfterBindSampledImages =
+      properties_out->maxDescriptorSetSampledImages;
+   properties_out->maxDescriptorSetUpdateAfterBindStorageImages =
+      properties_out->maxDescriptorSetStorageImages;
+   properties_out->maxDescriptorSetUpdateAfterBindInputAttachments =
+      properties_out->maxDescriptorSetInputAttachments;
+
+   /* There are no descriptor sets in the hardware, and technically there's no limit because sets
+    * can be empty, but other drivers generally provide small numbers of bound sets, so expose a
+    * finite amount assuming that every binding can be in its own set.
+    */
+   uint32_t const max_per_set_descriptors = properties_out->maxDescriptorSetSamplers +
+                                            properties_out->maxDescriptorSetUniformBuffers +
+                                            properties_out->maxDescriptorSetStorageBuffers +
+                                            properties_out->maxDescriptorSetSampledImages +
+                                            properties_out->maxDescriptorSetStorageImages +
+                                            properties_out->maxDescriptorSetInputAttachments;
+   properties_out->maxBoundDescriptorSets = max_per_set_descriptors;
+
+   properties_out->maxVertexInputAttributes = TERAKAN_VK_STATE_MAX_VERTEX_ATTRIBUTES;
+   properties_out->maxVertexInputBindings = TERAKAN_VK_STATE_MAX_VERTEX_BINDINGS;
+   properties_out->maxVertexInputAttributeOffset = UINT16_MAX;
+   /* R9xx expanded the buffer resource descriptor stride field from 11 to 12 bits, but prior to it,
+    * the mandatory 2048 stride value is implemented via the #2048StrideAs1024 fetch shader index
+    * fixup workaround.
+    */
+   properties_out->maxVertexInputBindingStride = chip_info->is_r9xx ? 0xFFF : 0x800;
+
+   properties_out->maxVertexOutputComponents = 4 * TERAKAN_LIMITS_HW_PARAMETER_CACHE_VECTOR_COUNT;
+
+   /* TODO(Triang3l): Tessellation limits. */
+
+   /* TODO(Triang3l): Geometry shader limits. */
+
+   properties_out->maxFragmentInputComponents = 4 * TERAKAN_LIMITS_HW_PARAMETER_CACHE_VECTOR_COUNT;
+
+   properties_out->maxFragmentOutputAttachments = TERAKAN_VK_STATE_MAX_COLOR_ATTACHMENTS;
+   properties_out->maxFragmentDualSrcAttachments = 1;
+   properties_out->maxFragmentCombinedOutputResources = TERAKAN_COLOR_UAV_COUNT_PIXEL;
+
+   properties_out->maxComputeSharedMemorySize =
+      sizeof(uint32_t) * TERAKAN_LIMITS_HW_LDS_SIMD_DWORD_COUNT;
+
+   properties_out->maxComputeWorkGroupCount[0] = TERAKAN_LIMITS_HW_COMPUTE_GROUPS_PER_DIMENSION;
+   properties_out->maxComputeWorkGroupCount[1] = TERAKAN_LIMITS_HW_COMPUTE_GROUPS_PER_DIMENSION;
+   properties_out->maxComputeWorkGroupCount[2] = TERAKAN_LIMITS_HW_COMPUTE_GROUPS_PER_DIMENSION;
+   properties_out->maxComputeWorkGroupInvocations = TERAKAN_LIMITS_HW_COMPUTE_GROUP_SIZE;
+   properties_out->maxComputeWorkGroupSize[0] = TERAKAN_LIMITS_HW_COMPUTE_GROUP_SIZE;
+   properties_out->maxComputeWorkGroupSize[1] = TERAKAN_LIMITS_HW_COMPUTE_GROUP_SIZE;
+   properties_out->maxComputeWorkGroupSize[2] = TERAKAN_LIMITS_HW_COMPUTE_GROUP_SIZE;
+
+   properties_out->subPixelPrecisionBits = 8;
+   properties_out->subTexelPrecisionBits = 8;
+   properties_out->mipmapPrecisionBits = 8;
+
+   properties_out->maxDrawIndexedIndexValue = UINT32_MAX;
+
+   properties_out->maxDrawIndirectCount = UINT32_MAX;
+
+   properties_out->maxSamplerLodBias = 0x1.0p5f - 0x1.0p-8f;
+   properties_out->maxSamplerAnisotropy = 0x1.0p4f;
+
+   properties_out->maxViewports = TERAKAN_HW_CONFIG_DRAW_PA_VPORT_COUNT;
+   properties_out->maxViewportDimensions[0] = TERAKAN_IMAGE_MAX_WIDTH_HEIGHT;
+   properties_out->maxViewportDimensions[1] = TERAKAN_IMAGE_MAX_WIDTH_HEIGHT;
+   properties_out->viewportBoundsRange[0] = TERAKAN_HW_CONFIG_DRAW_PA_CL_GB_MIN;
+   properties_out->viewportBoundsRange[1] = TERAKAN_HW_CONFIG_DRAW_PA_CL_GB_MAX;
+   properties_out->viewportSubPixelBits = 8;
+
+   properties_out->minMemoryMapAlignment = min_memory_map_alignment;
+
+   /* The largest is for R32G32B32A32 random access targets. */
+   properties_out->minTexelBufferOffsetAlignment = sizeof(uint32_t) * 4;
+
+   properties_out->minUniformBufferOffsetAlignment = TERAKAN_KCACHE_HW_LINE_BYTES;
+
+   properties_out->minStorageBufferOffsetAlignment = sizeof(uint32_t);
+
+   properties_out->minTexelOffset = -8;
+   properties_out->maxTexelOffset = 8;
+
+   /* TODO(Triang3l): Texel gather offset range when extended image gather is enabled (need to
+    * research the range given that the offsets come from a GPR vector).
+    */
+
+   /* TODO(Triang3l): Interpolation offset properties when sample-rate shading is enabled. */
+
+   properties_out->maxFramebufferWidth = TERAKAN_IMAGE_MAX_WIDTH_HEIGHT;
+   properties_out->maxFramebufferHeight = TERAKAN_IMAGE_MAX_WIDTH_HEIGHT;
+   properties_out->maxFramebufferLayers = TERAKAN_IMAGE_MAX_TARGET_SLICES;
+
+   VkSampleCountFlags const image_sample_counts =
+      VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT;
+   VkSampleCountFlags rasterization_sample_counts = image_sample_counts;
+   if (chip_info->is_r9xx) {
+      /* TODO(Triang3l): Don't expose 16 samples on devices with only 1 render backend enabled in
+       * `GB_BACKEND_MAP` because it has been reported that Z pass queries are not counted
+       * correctly. On old versions of DRM Radeon 2.50.0, however, `GB_BACKEND_MAP` reported by the
+       * `ioctl` is not filled, and 0 is given to the application instead, and the fix didn't raise
+       * the version number. Don't bother submitting a command buffer with a Z pass query to get the
+       * actual enabled render backends in VkPhysicalDevice initialization on such old kernel
+       * versions, just don't expose 16 samples similar to how they aren't available on Scrapper.
+       */
+      rasterization_sample_counts |= VK_SAMPLE_COUNT_16_BIT;
+   }
+
+   properties_out->framebufferColorSampleCounts = image_sample_counts;
+   properties_out->framebufferDepthSampleCounts = image_sample_counts;
+   properties_out->framebufferStencilSampleCounts = image_sample_counts;
+   properties_out->framebufferNoAttachmentsSampleCounts = rasterization_sample_counts;
+
+   properties_out->sampledImageColorSampleCounts = image_sample_counts;
+   properties_out->sampledImageIntegerSampleCounts = image_sample_counts;
+   properties_out->sampledImageDepthSampleCounts = image_sample_counts;
+   properties_out->sampledImageStencilSampleCounts = image_sample_counts;
+
+   properties_out->storageImageSampleCounts = VK_SAMPLE_COUNT_1_BIT;
+
+   properties_out->maxSampleMaskWords = 1;
+
+   if (clock_crystal_frequency_hz != 0) {
+      properties_out->timestampComputeAndGraphics = VK_TRUE;
+      properties_out->timestampPeriod = (float)(1e9 / (double)clock_crystal_frequency_hz);
+   }
+
+   /* TODO(Triang3l): Maximum clip and cull distances when enabled. */
+
+   properties_out->discreteQueuePriorities = 2;
+
+   /* TODO(Triang3l): Point size when enabled. */
+   /* TODO(Triang3l): Line width when wide lines are enabled. */
+
+   /* TODO(Triang3l): Research strict lines. */
+
+   properties_out->standardSampleLocations = VK_TRUE;
+
+   properties_out->optimalBufferCopyOffsetAlignment = 1;
+   properties_out->optimalBufferCopyRowPitchAlignment = 1;
+
+   /* No non-coherent host-visible memory types.
+    * Otherwise sysconf(_SC_LEVEL1_DCACHE_LINESIZE) on Linux.
+    */
+   properties_out->nonCoherentAtomSize = 1;
+
+   /* VK_KHR_sampler_mirror_clamp_to_edge (#15, Vulkan 1.2). */
+   extensions_out->KHR_sampler_mirror_clamp_to_edge = true;
+   features_out->samplerMirrorClampToEdge = true;
+
+   /* VK_KHR_dynamic_rendering (#45, Vulkan 1.3). */
+   extensions_out->KHR_dynamic_rendering = true;
+   features_out->dynamicRendering = true;
+
+   /* VK_KHR_external_memory_capabilities (#72, Vulkan 1.1, instance). */
+   char const driver_uuid[] = "AMD-MESA-DRV";
+   static_assert(sizeof(driver_uuid) <= sizeof(properties_out->driverUUID),
+                 "Driver UUID must fit into the Vulkan UUID field.");
+   memcpy(properties_out->driverUUID, driver_uuid, sizeof(driver_uuid));
+
+   /* VK_KHR_external_memory (#73, Vulkan 1.1). */
+   extensions_out->KHR_external_memory = true;
+
+   /* VK_EXT_depth_clip_enable (#103). */
+   extensions_out->EXT_depth_clip_enable = true;
+   features_out->depthClipEnable = true;
+
+   /* VK_KHR_dedicated_allocation (#128, Vulkan 1.1). */
+   extensions_out->KHR_dedicated_allocation = true;
+
+   /* VK_EXT_sample_locations (#144). */
+   extensions_out->EXT_sample_locations = true;
+   properties_out->sampleLocationSampleCounts = rasterization_sample_counts;
+   properties_out->maxSampleLocationGridSize = (VkExtent2D){2, 2};
+   properties_out->sampleLocationCoordinateRange[0] = 0.0f;
+   properties_out->sampleLocationCoordinateRange[1] = 1.0f - 0x1.0p-4f;
+   properties_out->sampleLocationSubPixelBits = 4;
+   properties_out->variableSampleLocations = VK_TRUE;
+
+   /* VK_KHR_bind_memory2 (#158, Vulkan 1.1). */
+   extensions_out->KHR_bind_memory2 = true;
+
+   /* TODO(Triang3l) VK_KHR_maintenance3 (#169, Vulkan 1.1) when vkGetDescriptorSetLayoutSupport
+    * is implemented.
+    */
+
+   /* VK_KHR_timeline_semaphore (#208, Vulkan 1.2). */
+   extensions_out->KHR_timeline_semaphore = true;
+   features_out->timelineSemaphore = true;
+   properties_out->maxTimelineSemaphoreValueDifference = UINT64_MAX;
+
+   /* VK_EXT_provoking_vertex (#255). */
+   extensions_out->EXT_provoking_vertex = true;
+   features_out->provokingVertexLast = true;
+   features_out->transformFeedbackPreservesProvokingVertex = true;
+   properties_out->provokingVertexModePerPipeline = VK_TRUE;
+   properties_out->transformFeedbackPreservesTriangleFanProvokingVertex = VK_TRUE;
+
+   /* VK_EXT_host_query_reset (#262, Vulkan 1.2). */
+   extensions_out->EXT_host_query_reset = true;
+   features_out->hostQueryReset = true;
+
+   /* VK_EXT_extended_dynamic_state (#268, Vulkan 1.3). */
+   extensions_out->EXT_extended_dynamic_state = true;
+   features_out->extendedDynamicState = true;
+
+   /* VK_KHR_map_memory2 (#272). */
+   extensions_out->KHR_map_memory2 = true;
+
+   /* VK_EXT_texel_buffer_alignment (#282, Vulkan 1.3). */
+   extensions_out->EXT_texel_buffer_alignment = true;
+   features_out->texelBufferAlignment = true;
+   /* Random access target element of the largest format. */
+   properties_out->storageTexelBufferOffsetAlignmentBytes = sizeof(uint32_t) * 4;
+   properties_out->storageTexelBufferOffsetSingleTexelAlignment = VK_TRUE;
+   /* Vertex fetch. */
+   properties_out->uniformTexelBufferOffsetAlignmentBytes = sizeof(uint32_t);
+   properties_out->uniformTexelBufferOffsetSingleTexelAlignment = VK_TRUE;
+
+   /* VK_EXT_depth_bias_control (#284). */
+   extensions_out->EXT_depth_bias_control = true;
+   features_out->depthBiasControl = true;
+   features_out->leastRepresentableValueForceUnormRepresentation = true;
+   features_out->floatRepresentation = true;
+   features_out->depthBiasExact = true;
+
+   /* TODO(Triang3l): Research border color formats with regard to VK_EXT_custom_border_color (#288)
+    * and VK_EXT_border_color_swizzle (#412).
+    */
+
+   /* VK_EXT_4444_formats (#341, Vulkan 1.3). */
+   extensions_out->EXT_4444_formats = true;
+   features_out->formatA4R4G4B4 = true;
+   features_out->formatA4B4G4R4 = true;
+
+   /* VK_EXT_vertex_input_dynamic_state (#353). */
+   extensions_out->EXT_vertex_input_dynamic_state = true;
+   features_out->vertexInputDynamicState = true;
+
+   /* VK_EXT_depth_clip_control (#356). */
+   extensions_out->EXT_depth_clip_control = true;
+   features_out->depthClipControl = true;
+
+   /* VK_KHR_format_feature_flags2 (#361, Vulkan 1.3). */
+   extensions_out->KHR_format_feature_flags2 = true;
+
+   /* TODO(Triang3l): VK_EXT_extended_dynamic_state2 (#378, Vulkan 1.3) when all state is
+    * implemented.
+    */
+
+   /* VK_EXT_color_write_enable (#382). */
+   extensions_out->EXT_color_write_enable = true;
+   features_out->colorWriteEnable = true;
+
+   /* TODO(Triang3l): VK_KHR_maintenance4 (#414, Vulkan 1.3): maxBufferSize = UINT32_MAX. */
+   /* Addresses within buffers are limited to 32 bits in several places:
+    * - Index buffer binding via INDEX_BASE.
+    * - Wraparound in copying (most importantly image copying) not handled.
+    * The DRM Radeon driver, however, limits addresses within device memory to 32 bits in various
+    * areas as of 2.50.0, so there's no sufficient justification for making workarounds to support
+    * more.
+    */
+
+   /* VK_EXT_non_seamless_cube_map (#423). */
+   extensions_out->EXT_non_seamless_cube_map = true;
+   features_out->nonSeamlessCubeMap = true;
+
+   /* VK_EXT_extended_dynamic_state3 (#456). */
+   /* TODO(Triang3l): All supported dynamic state. */
+   extensions_out->EXT_extended_dynamic_state3 = true;
+   features_out->extendedDynamicState3DepthClampEnable = true;
+   features_out->extendedDynamicState3PolygonMode = true;
+   features_out->extendedDynamicState3SampleMask = true;
+   features_out->extendedDynamicState3LogicOpEnable = true;
+   features_out->extendedDynamicState3ColorBlendEnable = true;
+   features_out->extendedDynamicState3ColorBlendEquation = true;
+   features_out->extendedDynamicState3ColorWriteMask = true;
+   features_out->extendedDynamicState3ProvokingVertexMode = true;
+   features_out->extendedDynamicState3DepthClipEnable = true;
+   features_out->extendedDynamicState3DepthClipNegativeOneToOne = true;
+   properties_out->dynamicPrimitiveTopologyUnrestricted = VK_TRUE;
+
+   /* VK_KHR_vertex_attribute_divisor (#526). */
+   extensions_out->EXT_vertex_attribute_divisor = true;
+   extensions_out->KHR_vertex_attribute_divisor = true;
+   features_out->vertexAttributeInstanceRateDivisor = true;
+   features_out->vertexAttributeInstanceRateZeroDivisor = true;
+   properties_out->maxVertexAttribDivisor = UINT32_MAX;
+   properties_out->supportsNonZeroFirstInstance = VK_TRUE;
+
+   /* Mesa WSI. */
+#ifdef TERAKAN_USE_WSI_PLATFORM
+   extensions_out->KHR_swapchain = true;
+   extensions_out->KHR_swapchain_mutable_format = true;
+#endif
+}
+
+VkExternalMemoryHandleTypeFlags
+terakan_physical_device_supported_external_memory_types(
+   struct terakan_physical_device const * const device)
+{
+   return (device->vk.supported_extensions.KHR_external_memory_fd
+              ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT
+              : 0) |
+          (device->vk.supported_extensions.EXT_external_memory_dma_buf
+              ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
+              : 0);
+}
+
+static void
+terakan_physical_device_init_memory_properties(
+   bool const has_dedicated_vram, VkDeviceSize const gtt_allocation_granularity,
+   VkDeviceSize const gtt_size, VkDeviceSize const vram_size, VkDeviceSize const vram_visible,
+   VkPhysicalDeviceMemoryProperties * const memory_properties_out)
+{
+   /* Based on radv_physical_device_init_mem_types. */
+
+   /* TODO(Triang3l): override_vram_size DRI option. */
+
+   VkDeviceSize gtt_heap_size = gtt_size;
+   VkDeviceSize vram_visible_size = MIN2(vram_size, vram_visible);
+   VkDeviceSize vram_not_visible_size = vram_size - vram_visible_size;
+
+   if (!has_dedicated_vram) {
+      VkDeviceSize const total_size = gtt_size + vram_visible_size;
+      /* TODO(Triang3l): enable_unified_heap_on_apu. */
+      /* On APUs, the carveout is usually too small for games that request a minimum VRAM size
+       * greater than it. To workaround this, we compute the total available memory size (GTT +
+       * visible VRAM size) and report 2/3 as VRAM and 1/3 as GTT (so games don't assume that the
+       * entire system memory is VRAM and occupy it like it doesn't affect memory available to the
+       * CPU).
+       */
+      vram_visible_size = ALIGN_POT((total_size * 2) / 3, gtt_allocation_granularity);
+      gtt_heap_size = total_size - vram_visible_size;
+      vram_not_visible_size = 0;
+   }
+
+   memory_properties_out->memoryHeapCount = 0;
+   /* Only get a VRAM heap if it is significant, not if it is a 16 MiB remainder above visible
+    * VRAM.
+    */
+   uint32_t heap_index_vram_not_visible = UINT32_MAX;
+   if (vram_not_visible_size > 0 && vram_not_visible_size * 9 >= vram_visible_size) {
+      heap_index_vram_not_visible = memory_properties_out->memoryHeapCount++;
+      VkMemoryHeap * const heap_vram_not_visible =
+         &memory_properties_out->memoryHeaps[heap_index_vram_not_visible];
+      heap_vram_not_visible->size = vram_not_visible_size;
+      heap_vram_not_visible->flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+   }
+   uint32_t heap_index_gtt = UINT32_MAX;
+   if (gtt_heap_size > 0) {
+      heap_index_gtt = memory_properties_out->memoryHeapCount++;
+      VkMemoryHeap * const heap_gtt = &memory_properties_out->memoryHeaps[heap_index_gtt];
+      heap_gtt->size = gtt_heap_size;
+      heap_gtt->flags = 0;
+   }
+   uint32_t heap_index_vram_visible = UINT32_MAX;
+   if (vram_visible_size > 0) {
+      heap_index_vram_visible = memory_properties_out->memoryHeapCount++;
+      VkMemoryHeap * const heap_vram_visible =
+         &memory_properties_out->memoryHeaps[heap_index_vram_visible];
+      heap_vram_visible->size = vram_visible_size;
+      heap_vram_visible->flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+   }
+
+   memory_properties_out->memoryTypeCount = 0;
+   if (heap_index_vram_not_visible != UINT32_MAX || heap_index_vram_visible != UINT32_MAX) {
+      VkMemoryType * const type_vram =
+         &memory_properties_out->memoryTypes[memory_properties_out->memoryTypeCount++];
+      type_vram->propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+      type_vram->heapIndex = heap_index_vram_not_visible != UINT32_MAX ? heap_index_vram_not_visible
+                                                                       : heap_index_vram_visible;
+   }
+   if (heap_index_gtt != UINT32_MAX) {
+      VkMemoryType * const type_gtt_wc =
+         &memory_properties_out->memoryTypes[memory_properties_out->memoryTypeCount++];
+      type_gtt_wc->propertyFlags =
+         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      type_gtt_wc->heapIndex = heap_index_gtt;
+   }
+   if (heap_index_vram_visible != UINT32_MAX) {
+      VkMemoryType * const type_vram_visible =
+         &memory_properties_out->memoryTypes[memory_properties_out->memoryTypeCount++];
+      type_vram_visible->propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      type_vram_visible->heapIndex = heap_index_vram_visible;
+   }
+   if (heap_index_gtt != UINT32_MAX) {
+      VkMemoryType * const type_gtt_cached =
+         &memory_properties_out->memoryTypes[memory_properties_out->memoryTypeCount++];
+      type_gtt_cached->propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+      type_gtt_cached->heapIndex = heap_index_gtt;
+   }
+}
+
+VKAPI_ATTR void VKAPI_CALL
+terakan_GetPhysicalDeviceMemoryProperties2(
+   VkPhysicalDevice const physicalDevice,
+   VkPhysicalDeviceMemoryProperties2 * const pMemoryProperties)
+{
+   struct terakan_physical_device const * const device =
+      terakan_physical_device_from_handle(physicalDevice);
+
+   pMemoryProperties->memoryProperties = device->memory_properties;
+}
+
+static void
+terakan_physical_device_get_queue_family_properties(
+   struct terakan_physical_device const * const device, uint32_t * const count,
+   VkQueueFamilyProperties * const * const properties_out)
+{
+   uint32_t const queue_family_count = 1;
+
+   if (properties_out == NULL) {
+      *count = queue_family_count;
+      return;
+   }
+
+   if (*count == 0) {
+      return;
+   }
+
+   uint32_t const timestamp_valid_bits = device->vk.properties.timestampComputeAndGraphics ? 64 : 0;
+
+   uint32_t next_index = 0;
+
+   if (*count > next_index) {
+      assert(next_index < queue_family_count);
+      VkQueueFamilyProperties * const queue_family_graphics = properties_out[next_index++];
+      queue_family_graphics->queueFlags =
+         VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT;
+      queue_family_graphics->queueCount = 1;
+      queue_family_graphics->timestampValidBits = timestamp_valid_bits;
+      queue_family_graphics->minImageTransferGranularity.width = 1;
+      queue_family_graphics->minImageTransferGranularity.height = 1;
+      queue_family_graphics->minImageTransferGranularity.depth = 1;
+   }
+
+   *count = next_index;
+}
+
+VKAPI_ATTR void VKAPI_CALL
+terakan_GetPhysicalDeviceQueueFamilyProperties2(
+   VkPhysicalDevice const physicalDevice, uint32_t * const pQueueFamilyPropertyCount,
+   VkQueueFamilyProperties2 * const pQueueFamilyProperties)
+{
+   struct terakan_physical_device const * const device =
+      terakan_physical_device_from_handle(physicalDevice);
+
+   if (pQueueFamilyProperties == NULL) {
+      terakan_physical_device_get_queue_family_properties(device, pQueueFamilyPropertyCount, NULL);
+      return;
+   }
+
+   VkQueueFamilyProperties * const properties[] = {
+      &pQueueFamilyProperties[0].queueFamilyProperties,
+   };
+   terakan_physical_device_get_queue_family_properties(device, pQueueFamilyPropertyCount,
+                                                       properties);
+   assert(*pQueueFamilyPropertyCount <= ARRAY_SIZE(properties));
+}
+
+VKAPI_ATTR void VKAPI_CALL
+terakan_GetPhysicalDeviceMultisamplePropertiesEXT(
+   VkPhysicalDevice const physicalDevice, VkSampleCountFlagBits const samples,
+   VkMultisamplePropertiesEXT * const pMultisampleProperties)
+{
+   pMultisampleProperties->maxSampleLocationGridSize =
+      samples & terakan_physical_device_from_handle(physicalDevice)
+                   ->vk.properties.sampleLocationSampleCounts
+         ? (VkExtent2D){2, 2}
+         : (VkExtent2D){};
+}
+
+void
+terakan_physical_device_finish(struct terakan_physical_device * const device)
+{
+   terakan_wsi_finish(device);
+
+   vk_physical_device_finish(&device->vk);
+}
+
+void
+terakan_physical_device_destroy(struct vk_physical_device * const device_base)
+{
+   struct terakan_physical_device * const device =
+      container_of(device_base, struct terakan_physical_device, vk);
+
+   r600_isa_destroy(device->isa);
+
+   device->winsys_fn->destroy(device);
+}
+
+VkResult
+terakan_physical_device_init(
+   struct terakan_physical_device * const device, struct terakan_instance * const instance,
+   struct terakan_physical_device_winsys_fn const * const winsys_fn_static,
+   uint32_t const pci_device_id, VkDeviceSize const gtt_allocation_granularity,
+   VkDeviceSize const gtt_size, VkDeviceSize const vram_size, VkDeviceSize const vram_visible,
+   VkDeviceSize const max_memory_allocation_size, VkDeviceSize const min_memory_map_alignment,
+   struct terakan_physical_device_tiling_info const * const tiling_info,
+   struct terakan_physical_device_submission_info_gfx const * const submission_info_gfx,
+   uint32_t const clock_crystal_frequency_hz,
+   struct vk_sync_type const * const * const supported_sync_types_static)
+{
+   VkResult result;
+
+   /* See NON-CONFORMANT: comments throughout the code for technical reasons. */
+   vk_warn_non_conformant_implementation("terakan");
+
+   device->winsys_fn = winsys_fn_static;
+
+   terakan_physical_device_chip_info_init(pci_device_id, &device->chip_info);
+
+   device->max_memory_allocation_size = max_memory_allocation_size;
+
+   device->tiling_info = *tiling_info;
+   /* HwlComputeMaxBaseAlignments from the R800 AddrLib for images.
+    * Maximum 8x8 micro-tile size is 8-sample and 16 byte-per-pixel.
+    * With the largest tile size, the bank width and height can be treated as 1.
+    *
+    * For buffers, the same alignment is needed as for images with the LINEAR_ALIGNED array mode
+    * because it's required for UAVs (equal to the pipe interleave in tiling), so it's included in
+    * the image alignment. It's normally 256 bytes, but potentially can be 512 bytes, depending on
+    * device. It's also not smaller than the kcache buffer alignment (256 bytes).
+    */
+   device->buffer_image_bo_alignment =
+      (VkDeviceSize)1 << (MIN2(device->tiling_info.row_bytes_log2, 3 + 3 + 3 + 4) +
+                          device->tiling_info.banks_log2 + device->tiling_info.pipes_log2);
+
+   device->submission_info_gfx = *submission_info_gfx;
+
+   device->nir_options_non_fs = (nir_shader_compiler_options){
+      .lower_fdiv = true,
+
+      .fuse_ffma16 = true,
+      .fuse_ffma32 = true,
+      .fuse_ffma64 = true,
+
+      .lower_flrp16 = true,
+      .lower_flrp32 = true,
+      .lower_flrp64 = true,
+
+      .lower_fpow = true,
+
+      .lower_fmod = true,
+
+      .lower_bitfield_extract = true,
+      .lower_bitfield_extract16 = true,
+      .lower_bitfield_extract8 = true,
+      .lower_bitfield_insert = true,
+
+      .lower_ifind_msb = true,
+      .lower_ufind_msb = true,
+
+      .lower_uadd_carry = true,
+      .lower_usub_borrow = true,
+
+      .lower_fisnormal = true,
+
+      .lower_isign = true,
+      .lower_fsign = true,
+      .lower_iabs = true,
+
+      .lower_ldexp = true,
+
+      .lower_pack_unorm_2x16 = true,
+      .lower_pack_snorm_2x16 = true,
+      .lower_pack_unorm_4x8 = true,
+      .lower_pack_snorm_4x8 = true,
+      .lower_pack_64_4x16 = true,
+      .lower_pack_32_2x16 = true,
+      .lower_pack_32_2x16_split = true,
+      .lower_unpack_unorm_2x16 = true,
+      .lower_unpack_snorm_2x16 = true,
+      .lower_unpack_unorm_4x8 = true,
+      .lower_unpack_snorm_4x8 = true,
+      .lower_unpack_32_2x16_split = true,
+
+      .lower_pack_split = true,
+
+      .lower_extract_byte = true,
+      .lower_extract_word = true,
+      .lower_insert_byte = true,
+      .lower_insert_word = true,
+
+      .lower_cs_local_index_to_id = true,
+
+      .lower_device_index_to_zero = true,
+
+      .lower_hadd = true,
+
+      .lower_uadd_sat = true,
+      .lower_usub_sat = true,
+      .lower_iadd_sat = true,
+
+      .lower_mul_32x16 = true,
+
+      .vectorize_tess_levels = true,
+
+      .lower_to_scalar = true,
+      .lower_to_scalar_filter = r600_lower_to_scalar_instr_filter,
+
+      .lower_interpolate_at = true,
+
+      .lower_mul_2x32_64 = true,
+
+      .has_umul24 = true,
+      .has_umad24 = true,
+
+      .has_fused_comp_and_csel = true,
+
+      .has_fsub = true,
+      .has_isub = true,
+
+      .has_fmulz = true,
+
+      .has_find_msb_rev = true,
+
+      .has_bfe = true,
+      .has_bfm = true,
+      /* TODO(Triang3l): Implement bfi in SFN. */
+      .has_bitfield_select = true,
+
+      /* Arbitrary (from RADV - in RadeonSI both are 128), was 255 due to a bug with the old
+       * (pre-SFN) compiler from 2014:
+       * https://bugs.freedesktop.org/show_bug.cgi?id=86720
+       */
+      /* TODO(Triang3l): Revisit max_unroll_iterations. */
+      .max_unroll_iterations = 32,
+      .max_unroll_iterations_aggressive = 128,
+
+      .lower_int64_options = ~(nir_lower_int64_options)0,
+
+      .lower_doubles_options = device->chip_info.is_r9xx
+                                  ? nir_lower_ddiv | nir_lower_dfloor | nir_lower_dceil |
+                                       nir_lower_dmod | nir_lower_dsub | nir_lower_dtrunc
+                                  : nir_lower_fp64_full_software,
+
+      .lower_image_offset_to_range_base = true,
+
+      /* lower_atomic_offset_to_range_base (needed on R8xx) is not applicable to Vulkan. */
+
+      .lower_fquantize2f16 = true,
+
+      .has_ddx_intrinsics = true,
+
+      .io_options = nir_io_mediump_is_32bit,
+   };
+
+   device->nir_options_fs = device->nir_options_non_fs;
+   device->nir_options_fs.lower_all_io_to_temps = true;
+
+   /* Must be allocated using calloc because r600_isa_destroy frees it, and r600_isa_destroy also
+    * must be called even if r600_isa_init fails.
+    */
+   device->isa = calloc(1, sizeof(struct r600_isa));
+   if (device->isa == NULL) {
+      return vk_error(instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
+   if (r600_isa_init(device->chip_info.is_r9xx ? CAYMAN : EVERGREEN, device->isa) != 0) {
+      result = vk_error(instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      goto fail_isa;
+   }
+
+   struct vk_device_extension_table extensions;
+   struct vk_features features;
+   struct vk_properties properties;
+   terakan_physical_device_get_capabilities(
+      instance, &device->chip_info, device->tiling_info.pipe_interleave_bytes_log2,
+      min_memory_map_alignment, clock_crystal_frequency_hz, max_memory_allocation_size, &extensions,
+      &features, &properties);
+   device->winsys_fn->get_winsys_extensions(device, &extensions, &features, &properties);
+
+   struct vk_physical_device_dispatch_table dispatch_table;
+   vk_physical_device_dispatch_table_from_entrypoints(&dispatch_table,
+                                                      &terakan_physical_device_entrypoints, true);
+   vk_physical_device_dispatch_table_from_entrypoints(&dispatch_table,
+                                                      &wsi_physical_device_entrypoints, false);
+
+   result = vk_physical_device_init(&device->vk, &instance->vk, &extensions, &features, &properties,
+                                    &dispatch_table);
+   if (result != VK_SUCCESS) {
+      goto fail_isa;
+   }
+
+   device->vk.supported_sync_types = supported_sync_types_static;
+
+   terakan_physical_device_init_memory_properties(device->chip_info.has_dedicated_vram,
+                                                  gtt_allocation_granularity, gtt_size, vram_size,
+                                                  vram_visible, &device->memory_properties);
+
+   /* Initialize WSI after everything else as it's a layer on top of the Vulkan physical device. */
+   result = terakan_wsi_init(device);
+   if (result != VK_SUCCESS) {
+      goto fail_device;
+   }
+
+   return VK_SUCCESS;
+
+fail_device:
+   vk_physical_device_finish(&device->vk);
+fail_isa:
+   r600_isa_destroy(device->isa);
+   return result;
+}
