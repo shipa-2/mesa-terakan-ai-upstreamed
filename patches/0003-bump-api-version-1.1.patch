@@ -1,3 +1,5 @@
+diff --git a/src/amd/terascale/vulkan/terakan_instance.h b/src/amd/terascale/vulkan/terakan_instance.h
+index 78db85d7929..d8fd782da55 100644
 --- a/src/amd/terascale/vulkan/terakan_instance.h
 +++ b/src/amd/terascale/vulkan/terakan_instance.h
 @@ -38,7 +38,7 @@ extern "C" {
@@ -9,23 +11,3 @@
  
  enum {
     TERAKAN_TEST_SHIFT_NO_ALPHA_TO_COVERAGE_DITHERING,
---- a/src/amd/terascale/vulkan/meson.build
-+++ b/src/amd/terascale/vulkan/meson.build
-@@ -214,7 +214,7 @@ endif
- 
- icd_command = [
-   prog_python, '@INPUT0@',
--  '--api-version', '1.0',
-+  '--api-version', '1.1',
-   '--xml', '@INPUT1@',
-   '--lib-path', join_paths(icd_lib_path, icd_file_name),
-   '--out', '@OUTPUT@',
-@@ -240,7 +240,7 @@ _dev_icd = custom_target(
-   output : _dev_icdname,
-   command : [
-     prog_python, '@INPUT0@',
--    '--api-version', '1.0',
-+    '--api-version', '1.1',
-     '--xml', '@INPUT1@',
-     '--lib-path', meson.current_build_dir() / icd_file_name,
-     '--out', '@OUTPUT@',

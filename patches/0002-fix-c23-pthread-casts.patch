@@ -1,27 +1,5 @@
-diff --git a/src/c11/impl/threads_posix.c b/src/c11/impl/threads_posix.c
-index a1b2c3d4e5f6..b2c3d4e5f6a7 100644
---- a/src/c11/impl/threads_posix.c
-+++ b/src/c11/impl/threads_posix.c
-@@ -98,7 +98,7 @@ cnd_timedwait(cnd_t *cond, mtx_t *mtx, const struct timespec *abs_time)
-     assert(cond != NULL);
-     assert(abs_time != NULL);
- 
--    rt = pthread_cond_timedwait(cond, mtx, abs_time);
-+    rt = pthread_cond_timedwait(cond, (pthread_mutex_t *)mtx, abs_time);
-     if (rt == ETIMEDOUT)
-         return thrd_timedout;
-     return (rt == 0) ? thrd_success : thrd_error;
-@@ -110,7 +110,7 @@ cnd_wait(cnd_t *cond, mtx_t *mtx)
- {
-     assert(mtx != NULL);
-     assert(cond != NULL);
--    return (pthread_cond_wait(cond, mtx) == 0) ? thrd_success : thrd_error;
-+    return (pthread_cond_wait(cond, (pthread_mutex_t *)mtx) == 0) ? thrd_success : thrd_error;
- }
- 
- 
 diff --git a/src/util/cnd_monotonic.c b/src/util/cnd_monotonic.c
-index c3d4e5f6a7b8..d4e5f6a7b8c9 100644
+index 71d9ac0d247..f0fd455e168 100644
 --- a/src/util/cnd_monotonic.c
 +++ b/src/util/cnd_monotonic.c
 @@ -130,9 +130,9 @@ u_cnd_monotonic_timedwait(struct u_cnd_monotonic *cond, mtx_t *mtx,

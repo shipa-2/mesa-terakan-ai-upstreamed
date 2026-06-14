@@ -1,5 +1,5 @@
 diff --git a/src/c11/impl/threads_posix.c b/src/c11/impl/threads_posix.c
-index 3b8692482bbe..a1b2c3d4e5f6 100644
+index 3b8692482bb..a111390f22a 100644
 --- a/src/c11/impl/threads_posix.c
 +++ b/src/c11/impl/threads_posix.c
 @@ -46,11 +46,13 @@ impl_thrd_routine(void *p)
@@ -14,10 +14,28 @@ index 3b8692482bbe..a1b2c3d4e5f6 100644
  }
 +#endif
  
+ 
  /*------------- 7.25.3 Condition variable functions -------------*/
- // 7.25.3.1
+@@ -96,7 +98,7 @@ cnd_timedwait(cnd_t *cond, mtx_t *mtx, const struct timespec *abs_time)
+     assert(cond != NULL);
+     assert(abs_time != NULL);
+ 
+-    rt = pthread_cond_timedwait(cond, mtx, abs_time);
++    rt = pthread_cond_timedwait(cond, (pthread_mutex_t *)mtx, abs_time);
+     if (rt == ETIMEDOUT)
+         return thrd_timedout;
+     return (rt == 0) ? thrd_success : thrd_error;
+@@ -108,7 +110,7 @@ cnd_wait(cnd_t *cond, mtx_t *mtx)
+ {
+     assert(mtx != NULL);
+     assert(cond != NULL);
+-    return (pthread_cond_wait(cond, mtx) == 0) ? thrd_success : thrd_error;
++    return (pthread_cond_wait(cond, (pthread_mutex_t *)mtx) == 0) ? thrd_success : thrd_error;
+ }
+ 
+ 
 diff --git a/src/c11/threads.h b/src/c11/threads.h
-index dbcb3459a9b2..f6e5d4c3b2a1 100644
+index dbcb3459a9b..2e70dc9c393 100644
 --- a/src/c11/threads.h
 +++ b/src/c11/threads.h
 @@ -118,8 +118,10 @@ typedef pthread_cond_t  cnd_t;
