@@ -27,6 +27,10 @@ echo
 run 8 vkgears
 run 6 vkcube
 
+if [[ -x "$(dirname "$0")/terakan-test-mipmap-blitz" ]]; then
+  run 15 "$(dirname "$0")/terakan-test-mipmap-blitz"
+fi
+
 echo "--- Device features (grep) ---"
 timeout 25 vulkaninfo 2>/dev/null | grep -E \
   'deviceName|apiVersion|multiDrawIndirect|shaderDraw|shaderSampledImageArrayDynamicIndexing|shaderStorageBufferArrayDynamicIndexing|shaderSampledImageArrayNonUniformIndexing|descriptorBindingPartiallyBound|VK_EXT_descriptor_indexing|maxPerStageDescriptorSamplers|maxPerStageDescriptorSampledImages' \
