@@ -1,12 +1,12 @@
 # Maintainer: shipa
 # Terakan full stack (Vulkan + r600 Gallium) for AMD TeraScale GPUs.
-# Branch: Terakan_Backup_2026-06-10_2_Meta_MSAA
+# Branch: Terakan_state_rework
 
 pkgbase=vulkan-terakan
 pkgname=(vulkan-terakan lib32-vulkan-terakan)
 pkgver=2026.06.10.r208352.g3ea9ca1acfd
-pkgrel=10
-_branch=Terakan_Backup_2026-06-10_2_Meta_MSAA
+pkgrel=11
+_branch=Terakan_state_rework
 pkgdesc="Vulkan 1.1 and OpenGL (r600) for AMD TeraScale (HD 2000-7000)"
 arch=('x86_64')
 url="https://gitlab.freedesktop.org/Triang3l/mesa"
@@ -35,35 +35,29 @@ conflicts=('vulkan-terakan-git')
 options=('!lto' '!debug')
 source=(
   "mesa::git+https://gitlab.freedesktop.org/Triang3l/mesa.git#branch=${_branch}"
-  "../../patches/0001-fix-c23.patch"
-  "../../patches/0002-fix-c23-pthread-casts.patch"
-  "../../patches/0003-bump-api-version-1.1.patch"
-  "../../patches/0004-implement-cmd-blit-image2.patch"
-  "../../patches/0005-implement-scaled-blit-image2.patch"
-  "../../patches/0006-blit-batch-and-dynamic-indexing-features.patch"
-  "../../patches/0007-implement-draw-indirect.patch"
-  "../../patches/0008-vk-ext-descriptor-indexing.patch"
+  "0001-fix-c23.patch"
+  "0002-fix-c23-pthread-casts.patch"
+  "0003-bump-api-version-1.1.patch"
+  "0004-implement-cmd-blit-image2.patch"
+  "0010-compute-mvp.patch"
   "terakan.conf"
   "terakan-vulkan-setup"
   "terakan-dx-setup"
   "terakan-vulkan32-setup"
-  "../../scripts/terakan-test-capabilities"
+  "terakan-test-capabilities"
 )
 sha256sums=(
   'SKIP'
-  '13a7d4006ba79735eb464756785e0b17d5d6840db59842d95b9dcd181c89f513'
-  '15d23b8f4da065e684db6c6279a91d6dbf5d6d396fb45eb5e6eaba1e3250a4d3'
-  'cc92dff47c4bbd327972dc037f23050a37ec7019c3ba60c948cd74322d09154f'
-  '83aab2832bd7b86f52e6c08f15d728791b66b58d97d7ff6339ae9f01644f2e41'
-  '2ddc54b476a657c4c16505867de20a3d73778283e57bccb3aec84ebbd745d33a'
-  '6bebe5e347775d58f13051a8a2b06d0cb1efbc7d5df721aff804ebc13504fe06'
-  '87fac28d930a82146659c5eab2a66f0f7fca72bd32104eb4a8f171270d69d078'
-  '1c149618192e4bf5e43f70912ded699800ee77e9b66354648ef5a5381e02be4d'
+  '4ea5eda4e6dc8e8d87b2ea95e1e23e7276f2f980b938daf86c5083a6f0c35fee'
+  '34cc7e39815dd77f998c85de3de18064e34b99f4f1f264aad193eff2a5450f86'
+  'afd575732d555b1e27bbab030cd1c48f8c257af7844e170efa9ef627a808d45f'
+  '15741b92d262c6f19b93b45a1d2700d2d30751825658defc85c95a97412b2274'
+  '9fc8949ab95f2428ddb8a4190a128c3e7f1cc5e0647e3dbdf1976746a805c555'
   '3f7a429cc643ae1c50111f91656c3f6de0279e49a66e861110a768080dd9d652'
   '5fea9547b4bc130864805e3b64a797ebf1365d0196aee783e67dbcf442882c55'
   '5b66a14acad9b569f7c0ae64206b7f6482801ed1e462f6c5ba565de98b4f2cd8'
   'eab6c4da7930810dac9fbd9ada350d95a76a5d579613621561df11b35384fee7'
-  'd27e184bcceade06ffd83580daa310c558db2a6d11a0695eda64f0666ca63e89'
+  '5df4249461ce1d2dfdf5fe8178719d49c048213c8bc4bd067b37cd172d3a24d4'
 )
 
 # GCC 16 + glibc 2.42+: C-only; do not pass to C++ (invalid for g++).
@@ -133,14 +127,14 @@ pkgver() {
 
 prepare() {
   cd mesa
+  git reset --hard HEAD
+  git clean -fd
+
   patch -Np1 -i ../0001-fix-c23.patch
   patch -Np1 -i ../0002-fix-c23-pthread-casts.patch
   patch -Np1 -i ../0003-bump-api-version-1.1.patch
   patch -Np1 -i ../0004-implement-cmd-blit-image2.patch
-  patch -Np1 -i ../0005-implement-scaled-blit-image2.patch
-  patch -Np1 -i ../0006-blit-batch-and-dynamic-indexing-features.patch
-  patch -Np1 -i ../0007-implement-draw-indirect.patch
-  patch -Np1 -i ../0008-vk-ext-descriptor-indexing.patch
+  patch -Np1 -i ../0010-compute-mvp.patch
 
   # Sanity check: required on glibc 2.42+ (C23 once_flag in stdlib.h).
   grep -q '#ifndef __once_flag_defined' src/c11/threads.h
