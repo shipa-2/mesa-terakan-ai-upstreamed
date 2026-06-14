@@ -59,13 +59,23 @@ terakan_vk_cmd_dispatch(VkCommandBuffer const commandBuffer, uint32_t const grou
    if (unlikely(groupCountX == 0 || groupCountY == 0 || groupCountZ == 0)) {
       return;
    }
-   if (unlikely(baseGroupX != 0 || baseGroupY != 0 || baseGroupZ != 0)) {
-      /* TODO(Triang3l): VGT_COMPUTE_START_* for non-zero base groups. */
-      return;
-   }
-
    struct terakan_gfx_command_writer * const command_writer =
       terakan_command_buffer_from_handle(commandBuffer)->command_writer.gfx;
+
+   if (unlikely(baseGroupX != 0 || baseGroupY != 0 || baseGroupZ != 0)) {
+      /* Set VGT_COMPUTE_START_X/Y/Z before dispatch for non-zero base groups. */
+      uint32_t * start_packet = terakan_gfx_command_writer_emit(
+         command_writer, TERAKAN_GFX_COMMAND_WRITER_EMIT_CONTENTS_CONFIG, 2 + 3);
+      if (unlikely(start_packet == NULL)) {
+         return;
+      }
+      *start_packet++ = PKT3(PKT3_SET_CONFIG_REG, 3, 0);
+      *start_packet++ = TERAKAN_CONFIG_REG_OFFSET(R_00899C_VGT_COMPUTE_START_X);
+      *start_packet++ = baseGroupX;
+      *start_packet++ = baseGroupY;
+      *start_packet++ = baseGroupZ;
+      terakan_gfx_command_writer_emit_done(command_writer, start_packet);
+   }
 
    /* Flush CB UAV data and CS state before dispatch so compute shader can read previous writes. */
    terakan_barrier_emit_actions_unconditionally(

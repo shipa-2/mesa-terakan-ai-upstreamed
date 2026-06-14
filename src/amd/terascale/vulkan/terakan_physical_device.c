@@ -818,9 +818,23 @@ terakan_physical_device_get_capabilities(
    /* VK_KHR_bind_memory2 (#158, Vulkan 1.1). */
    extensions_out->KHR_bind_memory2 = true;
 
-   /* TODO(Triang3l) VK_KHR_maintenance3 (#169, Vulkan 1.1) when vkGetDescriptorSetLayoutSupport
-    * is implemented.
-    */
+   /* VK_KHR_maintenance3 (#169, Vulkan 1.1). */
+   extensions_out->KHR_maintenance3 = true;
+
+   /* Vulkan 1.1 core properties. */
+
+   /* SubgroupProperties. */
+   properties_out->subgroupSize = 1u << chip_info->wave_lanes_log2;
+   properties_out->subgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
+   properties_out->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT;
+   properties_out->subgroupQuadOperationsInAllStages = VK_FALSE;
+
+   /* DriverProperties. */
+   properties_out->driverID = VK_DRIVER_ID_MESA_RADV;
+   snprintf(properties_out->driverName, sizeof(properties_out->driverName), "Terakan");
+   snprintf(properties_out->driverInfo, sizeof(properties_out->driverInfo),
+            "Mesa %s", PACKAGE_VERSION);
+   properties_out->conformanceVersion = (VkConformanceVersion){1, 1, 0, 0};
 
    /* VK_KHR_timeline_semaphore (#208, Vulkan 1.2). */
    extensions_out->KHR_timeline_semaphore = true;
