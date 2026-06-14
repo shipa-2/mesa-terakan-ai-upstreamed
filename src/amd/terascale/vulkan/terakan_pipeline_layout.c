@@ -368,3 +368,26 @@ terakan_CreatePipelineLayout(VkDevice const deviceHandle,
    *pPipelineLayout = terakan_pipeline_layout_to_handle(layout);
    return VK_SUCCESS;
 }
+
+VKAPI_ATTR void VKAPI_CALL
+terakan_GetDescriptorSetLayoutSupport(VkDevice device,
+                                      VkDescriptorSetLayoutCreateInfo const * const pCreateInfo,
+                                      VkDescriptorSetLayoutSupport * const pSupport)
+{
+   (void)device;
+   /* Validate descriptor set layout against hardware limits. */
+   uint32_t total_descriptors = 0;
+   for (uint32_t i = 0; i < pCreateInfo->bindingCount; ++i) {
+      total_descriptors += pCreateInfo->pBindings[i].descriptorCount;
+   }
+   /* Terakan supports up to 128 total descriptors per set. */
+   pSupport->supported = total_descriptors <= 128;
+}
+
+VKAPI_ATTR void VKAPI_CALL
+terakan_GetDescriptorSetLayoutSupportKHR(VkDevice device,
+                                         VkDescriptorSetLayoutCreateInfo const * const pCreateInfo,
+                                         VkDescriptorSetLayoutSupport * const pSupport)
+{
+   terakan_GetDescriptorSetLayoutSupport(device, pCreateInfo, pSupport);
+}
