@@ -43,8 +43,6 @@ See [docs/BUILD.md](docs/BUILD.md) for full build instructions.
 
 ## Screenshots
 
-Place screenshot files in `screenshots/` directory. Current captures (2026-06):
-
 ### vkQuake3 (Vulkan renderer)
 
 ![vkQuake3 — multi_texture horizontal stripes](screenshots/vkquake3_multitexture_stripes.png)
