@@ -1,15 +1,353 @@
-diff --git a/src/amd/terascale/vulkan/meta/terakan_meta_copy_image.c b/src/amd/terascale/vulkan/meta/terakan_meta_copy_image.c
-index 58868a8..281819e 100644
---- a/src/amd/terascale/vulkan/meta/terakan_meta_copy_image.c
-+++ b/src/amd/terascale/vulkan/meta/terakan_meta_copy_image.c
-@@ -373,3 +373,94 @@ terakan_CmdCopyImage2(VkCommandBuffer const commandBuffer,
-       }
-    }
- }
+diff --git a/src/amd/terascale/vulkan/meson.build b/src/amd/terascale/vulkan/meson.build
+index 2f5eefa9114..07fa2a4142e 100644
+--- a/src/amd/terascale/vulkan/meson.build
++++ b/src/amd/terascale/vulkan/meson.build
+@@ -43,6 +43,7 @@ libterakan_files = files(
+   'meta/terakan_meta_copy_buffer_image.c',
+   'meta/terakan_meta_copy_expand_3x.c',
+   'meta/terakan_meta_copy_image.c',
++  'meta/terakan_meta_blit_image.c',
+   'meta/terakan_meta_dummy.c',
+   'meta/terakan_meta_impl.h',
+   'meta/terakan_meta_query_accum.c',
+@@ -52,6 +53,8 @@ libterakan_files = files(
+   'nir/terakan_nir_buffer.c',
+   'nir/terakan_nir_compact_rtv_dsb_exports.c',
+   'nir/terakan_nir_lower_bindings.c',
++  'terakan_app_config_compute.c',
++  'terakan_app_config_compute.h',
+   'terakan_app_config_draw.c',
+   'terakan_app_config_draw.h',
+   'terakan_barrier.c',
+@@ -77,6 +80,8 @@ libterakan_files = files(
+   'terakan_format.h',
+   'terakan_hw_config_draw.c',
+   'terakan_hw_config_draw.h',
++  'terakan_hw_config_compute.c',
++  'terakan_hw_config_compute.h',
+   'terakan_hw_config_shared.c',
+   'terakan_hw_config_shared.h',
+   'terakan_hw_config_sqk.c',
+@@ -107,6 +112,9 @@ libterakan_files = files(
+   'terakan_vertex_input.c',
+   'terakan_vertex_input.h',
+   'terakan_vk_draw.c',
++  'terakan_vk_dispatch.c',
++  'terakan_vk_pipeline_compute.c',
++  'terakan_vk_pipeline_compute.h',
+   'terakan_vk_pipeline_graphics.c',
+   'terakan_vk_pipeline_graphics.h',
+   'terakan_vk_render_pass.c',
+@@ -214,7 +222,7 @@ endif
+ 
+ icd_command = [
+   prog_python, '@INPUT0@',
+-  '--api-version', '1.0',
++  '--api-version', '1.1',
+   '--xml', '@INPUT1@',
+   '--lib-path', join_paths(icd_lib_path, icd_file_name),
+   '--out', '@OUTPUT@',
+@@ -240,7 +248,7 @@ _dev_icd = custom_target(
+   output : _dev_icdname,
+   command : [
+     prog_python, '@INPUT0@',
+-    '--api-version', '1.0',
++    '--api-version', '1.1',
+     '--xml', '@INPUT1@',
+     '--lib-path', meson.current_build_dir() / icd_file_name,
+     '--out', '@OUTPUT@',
+diff --git a/src/amd/terascale/vulkan/meta/terakan_meta.c b/src/amd/terascale/vulkan/meta/terakan_meta.c
+index 65085e909fc..e3cb4093048 100644
+--- a/src/amd/terascale/vulkan/meta/terakan_meta.c
++++ b/src/amd/terascale/vulkan/meta/terakan_meta.c
+@@ -43,6 +43,7 @@ struct terakan_meta_shader const * const terakan_meta_shaders[TERAKAN_META_SHADE
+    [TERAKAN_META_SHADER_COPY_BUFFER_TO_IMAGE_PS] = &terakan_meta_copy_buffer_to_image_ps,
+    [TERAKAN_META_SHADER_COPY_IMAGE_TO_BUFFER_PS] = &terakan_meta_copy_image_to_buffer_ps,
+    [TERAKAN_META_SHADER_COPY_IMAGE_PS] = &terakan_meta_copy_image_ps,
++   [TERAKAN_META_SHADER_BLIT_IMAGE_PS] = &terakan_meta_blit_image_ps,
+    [TERAKAN_META_SHADER_COPY_EXPAND_3X_PS] = &terakan_meta_copy_expand_3x_ps,
+    [TERAKAN_META_SHADER_QUERY_ACCUM_ZPASS_1_RB_VS] = &terakan_meta_query_accum_zpass_1_rb_vs,
+    [TERAKAN_META_SHADER_QUERY_ACCUM_ZPASS_2_RB_VS] = &terakan_meta_query_accum_zpass_2_rb_vs,
+@@ -184,6 +185,8 @@ terakan_meta_config_draw_begin(
+    struct terakan_gfx_command_writer * const command_writer,
+    struct terakan_meta_config_draw_begin_options const * const begin_options)
+ {
++   command_writer->meta_blit_draw_session_active = false;
++
+    /* Disable query counter incrementing. */
+    terakan_hw_config_shared_set_pipelinestat_streamoutstats_enable(
+       &command_writer->hw_config_shared, false);
+diff --git a/src/amd/terascale/vulkan/meta/terakan_meta.h b/src/amd/terascale/vulkan/meta/terakan_meta.h
+index 99566c12a77..d07a25f7c91 100644
+--- a/src/amd/terascale/vulkan/meta/terakan_meta.h
++++ b/src/amd/terascale/vulkan/meta/terakan_meta.h
+@@ -90,6 +90,7 @@ enum terakan_meta_shader_index {
+    TERAKAN_META_SHADER_COPY_BUFFER_TO_IMAGE_PS,
+    TERAKAN_META_SHADER_COPY_IMAGE_TO_BUFFER_PS,
+    TERAKAN_META_SHADER_COPY_IMAGE_PS,
++   TERAKAN_META_SHADER_BLIT_IMAGE_PS,
+    TERAKAN_META_SHADER_COPY_EXPAND_3X_PS,
+ 
+    /* Z pass query accumulation shader indices for each render backend count must be consecutive. */
+diff --git a/src/amd/terascale/vulkan/meta/terakan_meta_blit_image.c b/src/amd/terascale/vulkan/meta/terakan_meta_blit_image.c
+new file mode 100644
+index 00000000000..41fb3110aad
+--- /dev/null
++++ b/src/amd/terascale/vulkan/meta/terakan_meta_blit_image.c
+@@ -0,0 +1,579 @@
++/*
++ * Copyright © 2026 Vitaliy Triang3l Kuzmin
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "terakan_meta_impl.h"
++
++#include "terakan_barrier.h"
++#include "terakan_entrypoints.h"
++#include "terakan_image.h"
++#include "terakan_sampler.h"
++
++#include "util/bitscan.h"
++#include "util/macros.h"
++#include "util/u_debug.h"
++#include "util/u_math.h"
++
++#include <assert.h>
++#include <stdlib.h>
++
++enum {
++   TERAKAN_META_BLIT_CONST_SCALE_X,
++   TERAKAN_META_BLIT_CONST_OFF_X,
++   TERAKAN_META_BLIT_CONST_SCALE_Y,
++   TERAKAN_META_BLIT_CONST_OFF_Y,
++
++   TERAKAN_META_BLIT_CONSTS_COUNT,
++};
++
++static uint32_t const terakan_meta_blit_image_ps_r8xx[] = {
++   S_SQ_CF_WORD0_ADDR(3) | S_SQ_CF_ALU_WORD0_KCACHE_BANK0(TERAKAN_KCACHE_BUFFER_PUSH_CONSTANTS) |
++      S_SQ_CF_ALU_WORD0_KCACHE_MODE0(V_SQ_CF_KCACHE_LOCK_1),
++   S_SQ_CF_ALU_WORD1_KCACHE_ADDR0(
++      TERAKAN_KCACHE_DWORD_LINE(TERAKAN_META_BLIT_CONST_SCALE_X)) |
++      S_SQ_CF_ALU_WORD1_COUNT(1) | EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU,
++
++   S_SQ_CF_WORD0_ADDR(6),
++   S_SQ_CF_WORD1_COUNT(0) | S_SQ_CF_WORD1_BARRIER(true) | EG_V_SQ_CF_WORD1_SQ_CF_INST_TEX,
++
++   S_SQ_CF_ALLOC_EXPORT_WORD0_TYPE(V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_PIXEL) |
++      S_SQ_CF_ALLOC_EXPORT_WORD0_ARRAY_BASE(0) | S_SQ_CF_ALLOC_EXPORT_WORD0_RW_GPR(0),
++   S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_X(TERASCALE_SWIZZLE_X) |
++      S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Y(TERASCALE_SWIZZLE_Y) |
++      S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Z(TERASCALE_SWIZZLE_Z) |
++      S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_W(TERASCALE_SWIZZLE_W) |
++      S_SQ_CF_ALLOC_EXPORT_WORD1_BARRIER(true) | S_SQ_CF_ALLOC_EXPORT_WORD1_END_OF_PROGRAM(true) |
++      EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE,
++
++   /* R0.xy = R0.xy * scale + offset (single cycle; 2-cycle MUL+ADD PV hangs on Palm). */
++   TERAKAN_KCACHE_DWORD_WORD0_SRC1(0, TERAKAN_META_BLIT_CONST_SCALE_X) |
++      TERAKAN_KCACHE_DWORD_WORD1_SRC2(0, TERAKAN_META_BLIT_CONST_OFF_X) |
++      TERAKAN_SHADER_OP3(false, 0, 'X', MULADD_IEEE, EG, 0, 'X', 0, 0, 0, 0, VEC_012),
++   TERAKAN_KCACHE_DWORD_WORD0_SRC1(0, TERAKAN_META_BLIT_CONST_SCALE_Y) |
++      TERAKAN_KCACHE_DWORD_WORD1_SRC2(0, TERAKAN_META_BLIT_CONST_OFF_Y) |
++      TERAKAN_SHADER_OP3(true, 0, 'Y', MULADD_IEEE, EG, 0, 'Y', 0, 0, 0, 0, VEC_012),
++
++   0,
++   0,
++   S_SQ_TEX_WORD0_TEX_INST(3) |
++      S_SQ_TEX_WORD0_RESOURCE_ID(TERAKAN_RESOURCE_RANGE_SHADER_CONSTANT_ARRAYS_OR_META) |
++      S_SQ_TEX_WORD0_SRC_GPR(0),
++   S_SQ_TEX_WORD1_DST_GPR(0) | S_SQ_TEX_WORD1_DST_SEL_X(TERASCALE_SWIZZLE_X) |
++      S_SQ_TEX_WORD1_DST_SEL_Y(TERASCALE_SWIZZLE_Y) |
++      S_SQ_TEX_WORD1_DST_SEL_Z(TERASCALE_SWIZZLE_Z) | S_SQ_TEX_WORD1_DST_SEL_W(TERASCALE_SWIZZLE_W),
++   S_SQ_TEX_WORD2_SRC_SEL_X(TERASCALE_SWIZZLE_X) | S_SQ_TEX_WORD2_SRC_SEL_Y(TERASCALE_SWIZZLE_Y) |
++      S_SQ_TEX_WORD2_SRC_SEL_Z(TERASCALE_SWIZZLE_Z) | S_SQ_TEX_WORD2_SRC_SEL_W(TERASCALE_SWIZZLE_0),
++   0,
++};
++
++static uint32_t const terakan_meta_blit_image_ps_r9xx[] = {
++   S_SQ_CF_WORD0_ADDR(4) | S_SQ_CF_ALU_WORD0_KCACHE_BANK0(TERAKAN_KCACHE_BUFFER_PUSH_CONSTANTS) |
++      S_SQ_CF_ALU_WORD0_KCACHE_MODE0(V_SQ_CF_KCACHE_LOCK_1),
++   S_SQ_CF_ALU_WORD1_KCACHE_ADDR0(
++      TERAKAN_KCACHE_DWORD_LINE(TERAKAN_META_BLIT_CONST_SCALE_X)) |
++      S_SQ_CF_ALU_WORD1_COUNT(1) | EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU,
++
++   S_SQ_CF_WORD0_ADDR(6),
++   S_SQ_CF_WORD1_COUNT(0) | S_SQ_CF_WORD1_BARRIER(true) | EG_V_SQ_CF_WORD1_SQ_CF_INST_TEX,
++
++   S_SQ_CF_ALLOC_EXPORT_WORD0_TYPE(V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_PIXEL) |
++      S_SQ_CF_ALLOC_EXPORT_WORD0_ARRAY_BASE(0) | S_SQ_CF_ALLOC_EXPORT_WORD0_RW_GPR(0),
++   S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_X(TERASCALE_SWIZZLE_X) |
++      S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Y(TERASCALE_SWIZZLE_Y) |
++      S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Z(TERASCALE_SWIZZLE_Z) |
++      S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_W(TERASCALE_SWIZZLE_W) |
++      S_SQ_CF_ALLOC_EXPORT_WORD1_BARRIER(true) |
++      EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE,
++
++   TERAKAN_SHADER_CF_END_R9XX,
++
++   TERAKAN_KCACHE_DWORD_WORD0_SRC1(0, TERAKAN_META_BLIT_CONST_SCALE_X) |
++      TERAKAN_KCACHE_DWORD_WORD1_SRC2(0, TERAKAN_META_BLIT_CONST_OFF_X) |
++      TERAKAN_SHADER_OP3(false, 0, 'X', MULADD_IEEE, EG, 0, 'X', 0, 0, 0, 0, VEC_012),
++   TERAKAN_KCACHE_DWORD_WORD0_SRC1(0, TERAKAN_META_BLIT_CONST_SCALE_Y) |
++      TERAKAN_KCACHE_DWORD_WORD1_SRC2(0, TERAKAN_META_BLIT_CONST_OFF_Y) |
++      TERAKAN_SHADER_OP3(true, 0, 'Y', MULADD_IEEE, EG, 0, 'Y', 0, 0, 0, 0, VEC_012),
++
++   S_SQ_TEX_WORD0_TEX_INST(3) |
++      S_SQ_TEX_WORD0_RESOURCE_ID(TERAKAN_RESOURCE_RANGE_SHADER_CONSTANT_ARRAYS_OR_META) |
++      S_SQ_TEX_WORD0_SRC_GPR(0),
++   S_SQ_TEX_WORD1_DST_GPR(0) | S_SQ_TEX_WORD1_DST_SEL_X(TERASCALE_SWIZZLE_X) |
++      S_SQ_TEX_WORD1_DST_SEL_Y(TERASCALE_SWIZZLE_Y) |
++      S_SQ_TEX_WORD1_DST_SEL_Z(TERASCALE_SWIZZLE_Z) | S_SQ_TEX_WORD1_DST_SEL_W(TERASCALE_SWIZZLE_W),
++   S_SQ_TEX_WORD2_SRC_SEL_X(TERASCALE_SWIZZLE_X) | S_SQ_TEX_WORD2_SRC_SEL_Y(TERASCALE_SWIZZLE_Y) |
++      S_SQ_TEX_WORD2_SRC_SEL_Z(TERASCALE_SWIZZLE_Z) | S_SQ_TEX_WORD2_SRC_SEL_W(TERASCALE_SWIZZLE_0),
++   0,
++};
++
++struct terakan_meta_shader const terakan_meta_blit_image_ps = {
++   .r8xx =
++      {
++         .program = terakan_meta_blit_image_ps_r8xx,
++         .program_size_bytes = sizeof(terakan_meta_blit_image_ps_r8xx),
++         .static_registers =
++            {
++               .sq_pgm_resources =
++                  {
++                     S_028844_NUM_GPRS(1) | TERAKAN_META_SQ_PGM_RESOURCES_COMMON,
++                     TERAKAN_META_SQ_PGM_RESOURCES_2_COMMON,
++                  },
++               .stage =
++                  {
++                     .ps =
++                        {
++                           .sq_pgm_exports_ps = S_02884C_EXPORT_COLORS(1),
++                           .spi_ps_in_control =
++                              {
++                                 S_0286CC_NUM_INTERP(1) | S_0286CC_LINEAR_GRADIENT_ENA(1),
++                                 S_0286D0_FIXED_PT_POSITION_ENA(1) |
++                                    S_0286D0_FIXED_PT_POSITION_ADDR(0),
++                              },
++                           .spi_baryc_cntl = S_0286E0_LINEAR_CENTER_ENA(1),
++                           .cb_shader_mask = 0xF,
++                        },
++                  },
++            },
++      },
++   .r9xx =
++      {
++         .program = terakan_meta_blit_image_ps_r9xx,
++         .program_size_bytes = sizeof(terakan_meta_blit_image_ps_r9xx),
++         .static_registers =
++            {
++               .sq_pgm_resources =
++                  {
++                     S_028844_NUM_GPRS(1) | TERAKAN_META_SQ_PGM_RESOURCES_COMMON,
++                     TERAKAN_META_SQ_PGM_RESOURCES_2_COMMON,
++                  },
++               .stage =
++                  {
++                     .ps =
++                        {
++                           .sq_pgm_exports_ps = S_02884C_EXPORT_COLORS(1),
++                           .spi_ps_in_control =
++                              {
++                                 S_0286CC_NUM_INTERP(1) | S_0286CC_LINEAR_GRADIENT_ENA(1),
++                                 S_0286D0_FIXED_PT_POSITION_ENA(1) |
++                                    S_0286D0_FIXED_PT_POSITION_ADDR(0),
++                              },
++                           .spi_baryc_cntl = S_0286E0_LINEAR_CENTER_ENA(1),
++                           .cb_shader_mask = 0xF,
++                        },
++                  },
++            },
++      },
++   .kcache_used = BITFIELD_BIT(TERAKAN_KCACHE_BUFFER_PUSH_CONSTANTS),
++   .primary_meta_resource_used = true,
++};
++
++static void
++terakan_meta_blit_set_fs_sampler(struct terakan_gfx_command_writer * const command_writer,
++                                  VkFilter const filter)
++{
++   struct terakan_hw_config_sqk * const sqk = &command_writer->hw_config_sqk;
++   uint32_t * const sampler =
++      sqk->stages_[MESA_SHADER_FRAGMENT]
++         .samplers[TERAKAN_RESOURCE_RANGE_SHADER_CONSTANT_ARRAYS_OR_META]
++         .sampler;
++   bool const is_r9xx =
++      terakan_gfx_command_writer_physical_device(command_writer)->chip_info.is_r9xx;
++   if (!is_r9xx) {
++      /* R8xx: keep sqk_reset D3D11 null sampler — explicit writes hang Palm. */
++      return;
++   }
++   uint32_t const xy_filter = terakan_sampler_translate_filter(filter, false);
++   uint32_t const clamp = terakan_sampler_translate_address_mode(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
++
++   sampler[0] = S_03C000_CLAMP_X(clamp) | S_03C000_CLAMP_Y(clamp) | S_03C000_CLAMP_Z(clamp) |
++                S_03C000_XY_MAG_FILTER(xy_filter) | S_03C000_XY_MIN_FILTER(xy_filter) |
++                S_03C000_MIP_FILTER(V_03C000_SQ_TEX_XY_FILTER_POINT) |
++                S_03C000_BORDER_COLOR_TYPE(V_03C000_SQ_TEX_BORDER_COLOR_TRANS_BLACK);
++   sampler[1] = S_03C004_MIN_LOD(0) | S_03C004_MAX_LOD(0x3ff);
++   sampler[2] = 0;
++   sampler[3] = 0;
++   sqk->stages_[MESA_SHADER_FRAGMENT].modified.samplers |=
++      BITFIELD_BIT(TERAKAN_RESOURCE_RANGE_SHADER_CONSTANT_ARRAYS_OR_META);
++   sqk->draw_stages_pending_ |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
++}
++
++static void
++terakan_meta_blit_emit_pre_draw_barriers(struct terakan_gfx_command_writer * const command_writer,
++                                          bool const same_image)
++{
++   if (!terakan_gfx_command_writer_physical_device(command_writer)->chip_info.is_r9xx) {
++      /* R8xx: rely on app barriers; unconditional flush here hangs Palm on mip chains. */
++      return;
++   }
++
++   enum terakan_barrier_action_flags actions =
++      TERAKAN_BARRIER_ACTION_FLUSH_INV_CB_RTV_DATA |
++      TERAKAN_BARRIER_ACTION_PARTIAL_FLUSH_CP_THROUGH_PS |
++      TERAKAN_BARRIER_ACTION_INV_TC;
++
++   if (same_image) {
++      actions |= TERAKAN_BARRIER_ACTION_INV_VC;
++   }
++
++   actions |= command_writer->post_color_image_copy_write_barrier_actions;
++
++   terakan_barrier_emit_actions_unconditionally(command_writer, actions);
++   command_writer->post_color_image_copy_write_barrier_actions &= ~actions;
++}
++
++static void
++terakan_meta_blit_region_scale_off(int32_t const src0, int32_t const src1, int32_t const dst0,
++                                   int32_t const dst1, float * const scale_out,
++                                   float * const off_out)
++{
++   int32_t norm_src0 = src0;
++   int32_t norm_src1 = src1;
++   int32_t norm_dst0 = dst0;
++   int32_t norm_dst1 = dst1;
++
++   if (norm_dst0 > norm_dst1) {
++      norm_dst0 = dst1;
++      norm_dst1 = dst0;
++      norm_src0 = src1;
++      norm_src1 = src0;
++   } else if (norm_src0 > norm_src1) {
++      norm_src0 = src1;
++      norm_src1 = src0;
++   }
++
++   float const src_size = (float)(norm_src1 - norm_src0);
++   float const dst_size = (float)(norm_dst1 - norm_dst0);
++
++   *scale_out = src_size / dst_size;
++   *off_out = (float)norm_src0 - (float)norm_dst0 * (*scale_out);
++}
 +
 +static bool
-+terakan_meta_blit_region_to_copy(VkImageBlit2 const * const blit,
-+                                 VkImageCopy2 * const copy_out)
++terakan_meta_blit_region_to_copy(VkImageBlit2 const * const blit, VkImageCopy2 * const copy_out)
 +{
 +   int32_t const src_x0 = blit->srcOffsets[0].x;
 +   int32_t const src_x1 = blit->srcOffsets[1].x;
@@ -68,17 +406,252 @@ index 58868a8..281819e 100644
 +   return true;
 +}
 +
++#define TERAKAN_META_BLIT_TILE_SIZE 128
++
++static void
++terakan_meta_blit_image_region_draw(struct terakan_gfx_command_writer * const command_writer,
++                                    VkBlitImageInfo2 const * const blit_info,
++                                    VkImageBlit2 const * const region)
++{
++   struct terakan_image const * const dst_image =
++      terakan_image_from_handle(blit_info->dstImage);
++   struct terakan_image const * const src_image =
++      terakan_image_from_handle(blit_info->srcImage);
++
++   int32_t const dst_x0 = MIN2(region->dstOffsets[0].x, region->dstOffsets[1].x);
++   int32_t const dst_y0 = MIN2(region->dstOffsets[0].y, region->dstOffsets[1].y);
++   uint32_t const dst_width = (uint32_t)abs(region->dstOffsets[1].x - region->dstOffsets[0].x);
++   uint32_t const dst_height = (uint32_t)abs(region->dstOffsets[1].y - region->dstOffsets[0].y);
++
++   if (dst_width == 0 || dst_height == 0) {
++      return;
++   }
++
++   struct terakan_image_descriptor_create_info dst_descriptor_create_info = {.image = dst_image};
++   struct terakan_image_descriptor_create_info src_descriptor_create_info = {.image = src_image};
++
++   unsigned src_vk_aspect_mask_remaining = (unsigned)region->srcSubresource.aspectMask;
++   u_foreach_bit (dst_vk_aspect_bit_index, region->dstSubresource.aspectMask) {
++      dst_descriptor_create_info.image_aspect_index = terakan_format_aspect_index(
++         dst_image->format_info.aspect_map, (VkImageAspectFlags)1 << dst_vk_aspect_bit_index, 0);
++      dst_descriptor_create_info.view_format = terakan_meta_transfer_image_block_format_info(
++         terascale_format_bytes_per_block
++            [dst_image->format_info.aspect_formats[dst_descriptor_create_info.image_aspect_index]
++                .format]);
++      src_descriptor_create_info.image_aspect_index = terakan_format_aspect_index(
++         src_image->format_info.aspect_map,
++         (VkImageAspectFlags)1 << u_bit_scan(&src_vk_aspect_mask_remaining), 0);
++      src_descriptor_create_info.view_format = terakan_meta_transfer_image_block_format_info(
++         terascale_format_bytes_per_block
++            [src_image->format_info.aspect_formats[src_descriptor_create_info.image_aspect_index]
++                .format]);
++
++      dst_descriptor_create_info.subresource_range.base_mip_level = region->dstSubresource.mipLevel;
++      dst_descriptor_create_info.subresource_range.max_level_count = 1;
++      src_descriptor_create_info.subresource_range.base_mip_level = region->srcSubresource.mipLevel;
++      src_descriptor_create_info.subresource_range.max_level_count = 1;
++
++      if (src_image->vk.image_type == VK_IMAGE_TYPE_3D) {
++         src_descriptor_create_info.subresource_range.base_z_or_array_layer =
++            (uint32_t)MIN2(region->srcOffsets[0].z, region->srcOffsets[1].z);
++         src_descriptor_create_info.subresource_range.max_depth_or_layer_count =
++            (uint32_t)abs(region->srcOffsets[1].z - region->srcOffsets[0].z);
++      } else {
++         src_descriptor_create_info.subresource_range.base_z_or_array_layer =
++            region->srcSubresource.baseArrayLayer;
++         src_descriptor_create_info.subresource_range.max_depth_or_layer_count =
++            region->srcSubresource.layerCount;
++      }
++      dst_descriptor_create_info.subresource_range.base_z_or_array_layer =
++         dst_image->vk.image_type == VK_IMAGE_TYPE_3D
++            ? (uint32_t)MIN2(region->dstOffsets[0].z, region->dstOffsets[1].z)
++            : region->dstSubresource.baseArrayLayer;
++      dst_descriptor_create_info.subresource_range.max_depth_or_layer_count =
++         src_descriptor_create_info.subresource_range.max_depth_or_layer_count;
++
++      if (unlikely(!terakan_image_descriptor_subresource_range_sanitize(
++                      dst_image, &dst_descriptor_create_info.subresource_range, false) ||
++                   !terakan_image_descriptor_subresource_range_sanitize(
++                      src_image, &src_descriptor_create_info.subresource_range, false))) {
++         continue;
++      }
++
++      if (!terakan_gfx_command_writer_physical_device(command_writer)->chip_info.is_r9xx) {
++         /* Palm: full pre-blit barrier hangs; invalidate TC so PS can sample the source mip. */
++         terakan_barrier_emit_actions_unconditionally(command_writer,
++                                                      TERAKAN_BARRIER_ACTION_INV_TC);
++      }
++
++      struct terakan_resource_descriptor src_descriptor;
++      if (unlikely(!terakan_image_create_resource_descriptor(&src_descriptor_create_info,
++                                                             V_030000_SQ_TEX_DIM_2D_ARRAY, NULL,
++                                                             &src_descriptor))) {
++         continue;
++      }
++
++      src_descriptor_create_info.subresource_range.max_depth_or_layer_count =
++         MIN2(src_descriptor_create_info.subresource_range.max_depth_or_layer_count,
++              dst_descriptor_create_info.subresource_range.max_depth_or_layer_count);
++      dst_descriptor_create_info.subresource_range.max_depth_or_layer_count =
++         src_descriptor_create_info.subresource_range.max_depth_or_layer_count;
++
++      do {
++         struct terakan_color_descriptor dst_descriptor;
++         uint32_t const dst_descriptor_slices = terakan_image_create_color_descriptor(
++            &dst_descriptor_create_info, V_028C70_TEXTURE2DARRAY, &dst_descriptor, NULL);
++         if (unlikely(dst_descriptor_slices == 0)) {
++            break;
++         }
++
++         terakan_meta_config_draw_set_cb_rtvs_and_db_shader_control(
++            command_writer, 0xF, &dst_image->bo, &dst_descriptor, NULL,
++            TERAKAN_SHADER_DB_SHADER_CONTROL_IDENTITY);
++
++         terakan_hw_config_sqk_set_resource_fs(
++            &command_writer->hw_config_sqk,
++            TERAKAN_RESOURCE_RANGE_SHADER_CONSTANT_ARRAYS_OR_META, src_image->bo, &src_descriptor);
++
++         struct terakan_screen_rect const screen_bounds = {
++            .bounds = {[1] = {G_028C78_WIDTH_MAX(dst_descriptor.dim) + 1,
++                              G_028C78_HEIGHT_MAX(dst_descriptor.dim) + 1}},
++         };
++
++         for (uint32_t tile_y = 0; tile_y < dst_height; tile_y += TERAKAN_META_BLIT_TILE_SIZE) {
++            uint32_t const tile_h = MIN2(TERAKAN_META_BLIT_TILE_SIZE, dst_height - tile_y);
++            for (uint32_t tile_x = 0; tile_x < dst_width; tile_x += TERAKAN_META_BLIT_TILE_SIZE) {
++               uint32_t const tile_w = MIN2(TERAKAN_META_BLIT_TILE_SIZE, dst_width - tile_x);
++
++               VkOffset3D const tile_offset_blocks = vk_image_offset_to_elements(
++                  &dst_image->vk,
++                  (VkOffset3D){.x = dst_x0 + (int32_t)tile_x, .y = dst_y0 + (int32_t)tile_y, .z = 0});
++               VkExtent3D const tile_extent_blocks =
++                  vk_image_extent_to_elements(&dst_image->vk,
++                                              (VkExtent3D){.width = tile_w, .height = tile_h, .depth = 1});
++               VkRect2D const tile_region_rect = {
++                  .offset = {.x = tile_offset_blocks.x, .y = tile_offset_blocks.y},
++                  .extent = {.width = tile_extent_blocks.width, .height = tile_extent_blocks.height},
++               };
++
++               terakan_meta_draw_rect(
++                  command_writer,
++                  terakan_vk_rect_to_screen_rect(tile_region_rect, screen_bounds),
++                  dst_descriptor_slices);
++            }
++         }
++
++         dst_descriptor_create_info.subresource_range.base_z_or_array_layer += dst_descriptor_slices;
++         dst_descriptor_create_info.subresource_range.max_depth_or_layer_count -=
++            dst_descriptor_slices;
++         src_descriptor.resource[5] = (src_descriptor.resource[5] & C_030014_BASE_ARRAY) |
++                                      S_030014_BASE_ARRAY(G_030014_BASE_ARRAY(
++                                         src_descriptor.resource[5] + dst_descriptor_slices));
++      } while (dst_descriptor_create_info.subresource_range.max_depth_or_layer_count != 0);
++   }
++}
++
 +VKAPI_ATTR void VKAPI_CALL
 +terakan_CmdBlitImage2(VkCommandBuffer const commandBuffer,
 +                      VkBlitImageInfo2 const * const pBlitImageInfo)
 +{
++   struct terakan_gfx_command_writer * const command_writer =
++      terakan_command_buffer_from_handle(commandBuffer)->command_writer.gfx;
++
++   if (debug_get_bool_option("TERAKAN_SKIP_SCALED_BLIT", false)) {
++      STACK_ARRAY(VkImageCopy2, copies, pBlitImageInfo->regionCount);
++      uint32_t copy_count = 0;
++
++      for (uint32_t region_index = 0; region_index < pBlitImageInfo->regionCount; ++region_index) {
++         if (terakan_meta_blit_region_to_copy(&pBlitImageInfo->pRegions[region_index],
++                                              &copies[copy_count])) {
++            copy_count++;
++         }
++      }
++
++      if (copy_count > 0) {
++         VkCopyImageInfo2 const copy_info = {
++            .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2,
++            .srcImage = pBlitImageInfo->srcImage,
++            .srcImageLayout = pBlitImageInfo->srcImageLayout,
++            .dstImage = pBlitImageInfo->dstImage,
++            .dstImageLayout = pBlitImageInfo->dstImageLayout,
++            .regionCount = copy_count,
++            .pRegions = copies,
++         };
++         terakan_CmdCopyImage2(commandBuffer, &copy_info);
++      }
++
++      STACK_ARRAY_FINISH(copies);
++      return;
++   }
++
 +   STACK_ARRAY(VkImageCopy2, copies, pBlitImageInfo->regionCount);
 +   uint32_t copy_count = 0;
++   bool has_scaled_regions = false;
++   bool same_image_scaled = false;
 +
 +   for (uint32_t region_index = 0; region_index < pBlitImageInfo->regionCount; ++region_index) {
-+      if (terakan_meta_blit_region_to_copy(&pBlitImageInfo->pRegions[region_index],
-+                                             &copies[copy_count])) {
++      VkImageBlit2 const * const region = &pBlitImageInfo->pRegions[region_index];
++
++      if (terakan_meta_blit_region_to_copy(region, &copies[copy_count])) {
 +         copy_count++;
++      } else {
++         has_scaled_regions = true;
++         if (pBlitImageInfo->srcImage == pBlitImageInfo->dstImage) {
++            same_image_scaled = true;
++         }
++      }
++   }
++
++   if (has_scaled_regions) {
++      if (!command_writer->meta_blit_draw_session_active) {
++         terakan_meta_blit_emit_pre_draw_barriers(command_writer, same_image_scaled);
++
++         struct terakan_meta_config_draw_begin_options const meta_begin_options = {
++            .vgt_primitive_type = V_008958_DI_PT_RECTLIST,
++            .cb_and_db_shader_control_mode =
++               TERAKAN_META_CONFIG_DRAW_BEGIN_CB_MODE_NORMAL_WITH_RTV_AND_DYNAMIC_DB_SHADER_CONTROL,
++            .rasterization = {.enable = true},
++         };
++         terakan_meta_config_draw_begin(command_writer, &meta_begin_options);
++         terakan_meta_config_draw_set_sq_pgm_vs(
++            command_writer, TERAKAN_META_SHADER_POSITION_AND_LAYER_FROM_INDEX_VS);
++         terakan_meta_config_draw_set_sq_pgm_ps(command_writer, TERAKAN_META_SHADER_BLIT_IMAGE_PS);
++         terakan_meta_blit_set_fs_sampler(command_writer, pBlitImageInfo->filter);
++         command_writer->meta_blit_draw_session_active = true;
++      }
++
++      for (uint32_t region_index = 0; region_index < pBlitImageInfo->regionCount; ++region_index) {
++         VkImageBlit2 const * const region = &pBlitImageInfo->pRegions[region_index];
++
++         if (terakan_meta_blit_region_to_copy(region, &copies[0])) {
++            continue;
++         }
++
++         float scale_x, scale_y, off_x, off_y;
++         terakan_meta_blit_region_scale_off(region->srcOffsets[0].x, region->srcOffsets[1].x,
++                                            region->dstOffsets[0].x, region->dstOffsets[1].x,
++                                            &scale_x, &off_x);
++         terakan_meta_blit_region_scale_off(region->srcOffsets[0].y, region->srcOffsets[1].y,
++                                            region->dstOffsets[0].y, region->dstOffsets[1].y,
++                                            &scale_y, &off_y);
++
++         uint32_t constants[TERAKAN_META_BLIT_CONSTS_COUNT] = {
++            fui(scale_x),
++            fui(off_x),
++            fui(scale_y),
++            fui(off_y),
++         };
++         terakan_meta_config_draw_set_kcache_push_constants(command_writer, sizeof(constants),
++                                                            constants, false, true);
++         terakan_meta_blit_image_region_draw(command_writer, pBlitImageInfo, region);
++      }
++
++      command_writer->post_color_image_copy_write_barrier_actions |=
++         TERAKAN_BARRIER_ACTION_FLUSH_INV_CB_RTV_DATA |
++         TERAKAN_BARRIER_ACTION_PARTIAL_FLUSH_CP_THROUGH_PS;
++      if (same_image_scaled) {
++         command_writer->post_color_image_copy_write_barrier_actions |=
++            TERAKAN_BARRIER_ACTION_INV_TC | TERAKAN_BARRIER_ACTION_INV_VC;
 +      }
 +   }
 +
@@ -96,4 +669,382 @@ index 58868a8..281819e 100644
 +   }
 +
 +   STACK_ARRAY_FINISH(copies);
++
++   if (has_scaled_regions) {
++      command_writer->meta_blit_draw_session_active = false;
++   }
++}
+diff --git a/src/amd/terascale/vulkan/meta/terakan_meta_impl.h b/src/amd/terascale/vulkan/meta/terakan_meta_impl.h
+index 1dea5668905..ecd579660ff 100644
+--- a/src/amd/terascale/vulkan/meta/terakan_meta_impl.h
++++ b/src/amd/terascale/vulkan/meta/terakan_meta_impl.h
+@@ -88,6 +88,7 @@ extern struct terakan_meta_shader const terakan_meta_clear_color_ps;
+ extern struct terakan_meta_shader const terakan_meta_copy_buffer_to_image_ps;
+ extern struct terakan_meta_shader const terakan_meta_copy_image_to_buffer_ps;
+ extern struct terakan_meta_shader const terakan_meta_copy_image_ps;
++extern struct terakan_meta_shader const terakan_meta_blit_image_ps;
+ extern struct terakan_meta_shader const terakan_meta_copy_expand_3x_ps;
+ extern struct terakan_meta_shader const terakan_meta_query_accum_zpass_1_rb_vs;
+ extern struct terakan_meta_shader const terakan_meta_query_accum_zpass_2_rb_vs;
+diff --git a/src/amd/terascale/vulkan/terakan_command_buffer.c b/src/amd/terascale/vulkan/terakan_command_buffer.c
+index da3ceb830b2..f0e18a9d115 100644
+--- a/src/amd/terascale/vulkan/terakan_command_buffer.c
++++ b/src/amd/terascale/vulkan/terakan_command_buffer.c
+@@ -583,6 +583,26 @@ terakan_gfx_command_writer_emit_hw_config(
+    enum terakan_gfx_command_writer_emit_contents const contents)
+ {
+    if (contents == TERAKAN_GFX_COMMAND_WRITER_EMIT_CONTENTS_DRAW) {
++      if (command_writer->app_config_compute.shader != NULL) {
++         terakan_hw_config_shared_compute_emit_modified(command_writer);
++
++         if (!command_writer->hw_config_compute_initialized_in_indirect_buffer) {
++            command_writer->hw_config_compute_initialized_in_indirect_buffer = true;
++            terakan_hw_config_compute_set_all_modified(&command_writer->hw_config_compute);
++         }
++         terakan_hw_config_compute_emit_modified(command_writer);
++
++         if (!command_writer->hw_config_sqk_initialized_in_indirect_buffer) {
++            command_writer->hw_config_sqk_initialized_in_indirect_buffer = true;
++            terakan_hw_config_sqk_begin_emitting_first_draw_dispatch_in_indirect_buffer(
++               command_writer);
++         }
++         terakan_hw_config_sqk_emit_modified_for_compute(command_writer);
++
++         terakan_hw_config_draw_emit_modified(command_writer);
++         return;
++      }
++
+       terakan_hw_config_shared_draw_emit_modified(command_writer);
+ 
+       if (!command_writer->hw_config_draw_initialized_in_indirect_buffer) {
+@@ -995,13 +1015,16 @@ terakan_BeginCommandBuffer(VkCommandBuffer const commandBuffer,
+    gfx_command_writer->active_pipelinestat_streamoutstats_query_count = 0;
+ 
+    gfx_command_writer->hw_config_draw_initialized_in_indirect_buffer = false;
++   gfx_command_writer->hw_config_compute_initialized_in_indirect_buffer = false;
+    gfx_command_writer->hw_config_sqk_initialized_in_indirect_buffer = false;
++   gfx_command_writer->meta_blit_draw_session_active = false;
+ 
+    struct terakan_physical_device const * const physical_device =
+       terakan_command_buffer_physical_device(command_buffer);
+    terakan_hw_config_shared_reset(&gfx_command_writer->hw_config_shared,
+                                   &physical_device->chip_info);
+    terakan_hw_config_draw_reset(&gfx_command_writer->hw_config_draw);
++   terakan_hw_config_compute_reset(&gfx_command_writer->hw_config_compute);
+    /* TODO(Triang3l): R9xx `USE_LS_CONSTS` (perform thorough testing, and provide a regression
+     * testing flag for disabling).
+     */
+@@ -1012,6 +1035,7 @@ terakan_BeginCommandBuffer(VkCommandBuffer const commandBuffer,
+    struct terakan_device const * const device = terakan_command_buffer_device(command_buffer);
+ 
+    terakan_app_config_draw_reset(&gfx_command_writer->app_config_draw);
++   terakan_app_config_compute_reset(&gfx_command_writer->app_config_compute);
+    terakan_app_config_draw_set_pa_vport_z_range_unrestricted(
+       &gfx_command_writer->app_config_draw,
+       device->vk.enabled_extensions.EXT_depth_range_unrestricted);
+diff --git a/src/amd/terascale/vulkan/terakan_command_buffer.h b/src/amd/terascale/vulkan/terakan_command_buffer.h
+index f73fdb57559..3d65bc7c61f 100644
+--- a/src/amd/terascale/vulkan/terakan_command_buffer.h
++++ b/src/amd/terascale/vulkan/terakan_command_buffer.h
+@@ -25,11 +25,13 @@
+ #define TERAKAN_COMMAND_BUFFER_H
+ 
+ #include "terakan_app_config_draw.h"
++#include "terakan_app_config_compute.h"
+ #include "terakan_barrier.h"
+ #include "terakan_bo.h"
+ #include "terakan_descriptor.h"
+ #include "terakan_device.h"
+ #include "terakan_hw_config_draw.h"
++#include "terakan_hw_config_compute.h"
+ #include "terakan_hw_config_shared.h"
+ #include "terakan_hw_config_sqk.h"
+ #include "terakan_instance.h"
+@@ -359,10 +361,15 @@ struct terakan_gfx_command_writer {
+    size_t active_pipelinestat_streamoutstats_query_count;
+ 
+    bool hw_config_draw_initialized_in_indirect_buffer;
++   bool hw_config_compute_initialized_in_indirect_buffer;
+    bool hw_config_sqk_initialized_in_indirect_buffer;
+ 
++   /* Scaled blit reuses one meta draw session per command buffer (STK: one vkCmdBlitImage per mip). */
++   bool meta_blit_draw_session_active;
++
+    struct terakan_hw_config_shared hw_config_shared;
+    struct terakan_hw_config_draw hw_config_draw;
++   struct terakan_hw_config_compute hw_config_compute;
+    struct terakan_hw_config_sqk hw_config_sqk;
+ 
+    /* Modifies `hw_config_sqk`. */
+@@ -370,6 +377,8 @@ struct terakan_gfx_command_writer {
+ 
+    /* Modifies `hw_config` and `push_constants_state`. */
+    struct terakan_app_config_draw app_config_draw;
++
++   struct terakan_app_config_compute app_config_compute;
+ };
+ 
+ TERAKAN_DEVICE_DEFINE_OBJECT_SHORTCUTS(gfx_command_writer,
+@@ -646,6 +655,26 @@ terakan_gfx_command_writer_before_app_draw(struct terakan_gfx_command_writer * c
+    terakan_gfx_command_writer_before_hw_draw(command_writer);
+ }
+ 
++static inline void
++terakan_gfx_command_writer_before_app_dispatch(
++   struct terakan_gfx_command_writer * const command_writer)
++{
++   terakan_app_config_compute_apply_pending(command_writer);
++
++   /* Storage buffer UAVs for compute reuse CB/RAT state tracked in `app_config_draw`. */
++   if (command_writer->app_config_compute.cb_target_mask_ != 0) {
++      terakan_app_config_draw_apply_pending(command_writer);
++   }
++
++   terakan_hw_config_shared_set_pipelinestat_streamoutstats_enable(
++      &command_writer->hw_config_shared,
++      command_writer->active_pipelinestat_streamoutstats_query_count != 0);
++
++   terakan_push_constants_apply(command_writer, true);
++
++   terakan_gfx_command_writer_before_hw_draw(command_writer);
++}
++
+ struct terakan_command_pool {
+    struct vk_command_pool vk;
+ 
+diff --git a/src/amd/terascale/vulkan/terakan_physical_device.c b/src/amd/terascale/vulkan/terakan_physical_device.c
+index 915902a0f48..dbb5b88c890 100644
+--- a/src/amd/terascale/vulkan/terakan_physical_device.c
++++ b/src/amd/terascale/vulkan/terakan_physical_device.c
+@@ -443,8 +443,8 @@ terakan_physical_device_get_capabilities(
+    /* TODO(Triang3l): sampleRateShading. */
+    features_out->dualSrcBlend = true;
+    features_out->logicOp = true;
+-   /* TODO(Triang3l): multiDrawIndirect. */
+-   /* TODO(Triang3l): drawIndirectFirstInstance. */
++   features_out->multiDrawIndirect = true;
++   features_out->drawIndirectFirstInstance = true;
+    features_out->depthClamp = true;
+    features_out->depthBiasClamp = true;
+    features_out->fillModeNonSolid = true;
+@@ -467,13 +467,18 @@ terakan_physical_device_get_capabilities(
+    /* TODO(Triang3l): shaderTessellationAndGeometryPointSize. */
+    /* TODO(Triang3l): Possibly shaderImageGatherExtended. */
+    /* TODO(Triang3l): Shader storage image format features. */
+-   /* TODO(Triang3l): Shader binding array dynamic indexing. */
++   /* Shader binding array dynamic indexing is implemented in `terakan_nir_lower_bindings`. */
++   features_out->shaderUniformBufferArrayDynamicIndexing = true;
++   features_out->shaderSampledImageArrayDynamicIndexing = true;
++   features_out->shaderStorageBufferArrayDynamicIndexing = true;
++   features_out->shaderStorageImageArrayDynamicIndexing = true;
+    /* TODO(Triang3l): shaderClipDistance. */
+    /* TODO(Triang3l): shaderCullDistance. */
+    /* TODO(Triang3l): shaderFloat64. */
+    /* TODO(Triang3l): shaderResourceMinLod. */
+    /* TODO(Triang3l): variableMultisampleRate. */
+    features_out->inheritedQueries = true;
++   features_out->shaderDrawParameters = true;
+ 
+    properties_out->apiVersion = TERAKAN_API_VERSION;
+    /* TODO(Triang3l): Change to vk_get_driver_version() when Vulkan 1.0 compatibility is achieved.
+@@ -580,6 +585,66 @@ terakan_physical_device_get_capabilities(
+    properties_out->maxDescriptorSetInputAttachments =
+       properties_out->maxPerStageDescriptorInputAttachments;
+ 
++   /* VK_EXT_descriptor_indexing: dynamic/non-uniform binding arrays are lowered in
++    * `terakan_nir_lower_bindings`; partially bound descriptors skip unbound slots at bind time.
++    */
++   extensions_out->EXT_descriptor_indexing = true;
++
++   features_out->shaderInputAttachmentArrayDynamicIndexing = true;
++   features_out->shaderUniformTexelBufferArrayDynamicIndexing = true;
++   features_out->shaderStorageTexelBufferArrayDynamicIndexing = true;
++   features_out->shaderUniformBufferArrayNonUniformIndexing = true;
++   features_out->shaderSampledImageArrayNonUniformIndexing = true;
++   features_out->shaderStorageBufferArrayNonUniformIndexing = true;
++   features_out->shaderStorageImageArrayNonUniformIndexing = true;
++   features_out->shaderInputAttachmentArrayNonUniformIndexing = true;
++   features_out->shaderUniformTexelBufferArrayNonUniformIndexing = true;
++   features_out->shaderStorageTexelBufferArrayNonUniformIndexing = true;
++   features_out->descriptorBindingUniformBufferUpdateAfterBind = true;
++   features_out->descriptorBindingSampledImageUpdateAfterBind = true;
++   features_out->descriptorBindingStorageImageUpdateAfterBind = true;
++   features_out->descriptorBindingStorageBufferUpdateAfterBind = true;
++   features_out->descriptorBindingUniformTexelBufferUpdateAfterBind = true;
++   features_out->descriptorBindingStorageTexelBufferUpdateAfterBind = true;
++   features_out->descriptorBindingUpdateUnusedWhilePending = true;
++   features_out->descriptorBindingPartiallyBound = true;
++   features_out->descriptorBindingVariableDescriptorCount = true;
++   features_out->runtimeDescriptorArray = true;
++
++   properties_out->maxUpdateAfterBindDescriptorsInAllPools = UINT32_MAX;
++   properties_out->robustBufferAccessUpdateAfterBind = true;
++
++   properties_out->maxPerStageDescriptorUpdateAfterBindSamplers =
++      properties_out->maxPerStageDescriptorSamplers;
++   properties_out->maxPerStageDescriptorUpdateAfterBindUniformBuffers =
++      properties_out->maxPerStageDescriptorUniformBuffers;
++   properties_out->maxPerStageDescriptorUpdateAfterBindStorageBuffers =
++      properties_out->maxPerStageDescriptorStorageBuffers;
++   properties_out->maxPerStageDescriptorUpdateAfterBindSampledImages =
++      properties_out->maxPerStageDescriptorSampledImages;
++   properties_out->maxPerStageDescriptorUpdateAfterBindStorageImages =
++      properties_out->maxPerStageDescriptorStorageImages;
++   properties_out->maxPerStageDescriptorUpdateAfterBindInputAttachments =
++      properties_out->maxPerStageDescriptorInputAttachments;
++   properties_out->maxPerStageUpdateAfterBindResources = properties_out->maxPerStageResources;
++
++   properties_out->maxDescriptorSetUpdateAfterBindSamplers =
++      properties_out->maxDescriptorSetSamplers;
++   properties_out->maxDescriptorSetUpdateAfterBindUniformBuffers =
++      properties_out->maxDescriptorSetUniformBuffers;
++   properties_out->maxDescriptorSetUpdateAfterBindUniformBuffersDynamic =
++      properties_out->maxDescriptorSetUniformBuffersDynamic;
++   properties_out->maxDescriptorSetUpdateAfterBindStorageBuffers =
++      properties_out->maxDescriptorSetStorageBuffers;
++   properties_out->maxDescriptorSetUpdateAfterBindStorageBuffersDynamic =
++      properties_out->maxDescriptorSetStorageBuffersDynamic;
++   properties_out->maxDescriptorSetUpdateAfterBindSampledImages =
++      properties_out->maxDescriptorSetSampledImages;
++   properties_out->maxDescriptorSetUpdateAfterBindStorageImages =
++      properties_out->maxDescriptorSetStorageImages;
++   properties_out->maxDescriptorSetUpdateAfterBindInputAttachments =
++      properties_out->maxDescriptorSetInputAttachments;
++
+    /* There are no descriptor sets in the hardware, and technically there's no limit because sets
+     * can be empty, but other drivers generally provide small numbers of bound sets, so expose a
+     * finite amount assuming that every binding can be in its own set.
+@@ -630,7 +695,7 @@ terakan_physical_device_get_capabilities(
+ 
+    properties_out->maxDrawIndexedIndexValue = UINT32_MAX;
+ 
+-   /* TODO(Triang3l): maxDrawIndirectCount when indirect drawing is enabled. */
++   properties_out->maxDrawIndirectCount = UINT32_MAX;
+ 
+    properties_out->maxSamplerLodBias = 0x1.0p5f - 0x1.0p-8f;
+    properties_out->maxSamplerAnisotropy = 0x1.0p4f;
+diff --git a/src/amd/terascale/vulkan/terakan_vk_draw.c b/src/amd/terascale/vulkan/terakan_vk_draw.c
+index 08c0b85a056..7b7e637d5db 100644
+--- a/src/amd/terascale/vulkan/terakan_vk_draw.c
++++ b/src/amd/terascale/vulkan/terakan_vk_draw.c
+@@ -26,6 +26,7 @@
+ #include "terakan_entrypoints.h"
+ #include "terakan_vk_state.h"
+ 
++#include "amd/terascale/common/terascale_wddm.h"
+ #include "gallium/drivers/r600/evergreend.h"
+ #include "gallium/drivers/r600/r600d_common.h"
+ #include "util/macros.h"
+@@ -93,6 +94,93 @@ terakan_vk_before_draw(struct terakan_gfx_command_writer * const command_writer)
+    terakan_gfx_command_writer_before_app_draw(command_writer);
+ }
+ 
++static uint32_t
++terakan_vk_buffer_bo_relative_offset(struct terakan_buffer const * const buffer,
++                                     VkDeviceSize const offset)
++{
++   /* DRM Radeon relocates SET_BASE to the BO start without adding the packet offset. */
++   return (uint32_t)(buffer->va - buffer->bo->va + offset);
++}
++
++static void
++terakan_vk_draw_emit_set_base(struct terakan_gfx_command_writer * const command_writer,
++                              struct terakan_bo const * const bo)
++{
++   uint32_t * packet = terakan_gfx_command_writer_emit_with_bo(
++      command_writer, TERAKAN_GFX_COMMAND_WRITER_EMIT_CONTENTS_DRAW, 4, 1, 0, 1);
++   if (unlikely(packet == NULL)) {
++      return;
++   }
++   *packet++ = PKT3(EG_PKT3_SET_BASE, 2, 0);
++   *packet++ = EG_DRAW_INDEX_INDIRECT_PATCH_TABLE_BASE;
++   uint32_t const * const packet_va = packet;
++   *packet++ = (uint32_t)bo->va;
++   *packet++ = (bo->va >> 32) & 0xFF;
++   terakan_gfx_command_writer_add_relocation_for_40_bits(
++      command_writer, &packet, packet_va, packet_va + 1, TERASCALE_WDDM_PATCH_IDS_SET_BASE_LO,
++      TERASCALE_WDDM_PATCH_IDS_SET_BASE_HI,
++      terakan_bo_reference_writer_add_reference(&command_writer->base.bo_reference_writer, bo, true,
++                                                false, TERAKAN_BO_PRIORITY_DRAW_INDIRECT));
++   terakan_gfx_command_writer_emit_done(command_writer, packet);
++}
++
++static void
++terakan_vk_draw_emit_draw_indirect(struct terakan_gfx_command_writer * const command_writer,
++                                   uint32_t const bo_relative_offset, bool const indexed)
++{
++   uint32_t * packet = terakan_gfx_command_writer_emit(
++      command_writer, TERAKAN_GFX_COMMAND_WRITER_EMIT_CONTENTS_DRAW, 3);
++   if (unlikely(packet == NULL)) {
++      return;
++   }
++   *packet++ = PKT3(indexed ? EG_PKT3_DRAW_INDEX_INDIRECT : EG_PKT3_DRAW_INDIRECT, 1, 0);
++   *packet++ = bo_relative_offset;
++   *packet++ = S_0287F0_SOURCE_SELECT(indexed ? V_0287F0_DI_SRC_SEL_DMA
++                                             : V_0287F0_DI_SRC_SEL_AUTO_INDEX);
++   terakan_gfx_command_writer_emit_done(command_writer, packet);
++}
++
++static void
++terakan_vk_cmd_draw_indirect(VkCommandBuffer const commandBuffer, VkBuffer const bufferHandle,
++                             VkDeviceSize const offset, uint32_t const drawCount,
++                             uint32_t stride, bool const indexed)
++{
++   if (unlikely(drawCount == 0)) {
++      return;
++   }
++
++   struct terakan_buffer const * const buffer = terakan_buffer_from_handle(bufferHandle);
++   if (unlikely(buffer == NULL || buffer->bo == NULL)) {
++      return;
++   }
++
++   uint32_t const min_stride =
++      indexed ? (uint32_t)sizeof(VkDrawIndexedIndirectCommand) : (uint32_t)sizeof(VkDrawIndirectCommand);
++   if (stride == 0) {
++      stride = min_stride;
++   } else if (unlikely(stride < min_stride)) {
++      return;
++   }
++
++   struct terakan_gfx_command_writer * const command_writer =
++      terakan_command_buffer_from_handle(commandBuffer)->command_writer.gfx;
++
++   terakan_app_config_draw_set_vgt_dma_index_buffer_draw_indexed(&command_writer->app_config_draw,
++                                                                 indexed);
++   /* Draw parameters are loaded from the indirect buffer by the command processor. */
++   terakan_vk_draw_set_vertex_instance_offsets(command_writer, 0, 0);
++
++   terakan_vk_before_draw(command_writer);
++
++   terakan_vk_draw_emit_set_base(command_writer, buffer->bo);
++
++   uint32_t bo_relative_offset = terakan_vk_buffer_bo_relative_offset(buffer, offset);
++   for (uint32_t draw_index = 0; draw_index < drawCount; ++draw_index) {
++      terakan_vk_draw_emit_draw_indirect(command_writer, bo_relative_offset, indexed);
++      bo_relative_offset += stride;
++   }
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ terakan_CmdDraw(VkCommandBuffer const commandBuffer, uint32_t const vertexCount,
+                 uint32_t const instanceCount, uint32_t const firstVertex,
+@@ -158,3 +246,18 @@ terakan_CmdDrawIndexed(VkCommandBuffer const commandBuffer, uint32_t const index
+    *packet++ = S_0287F0_SOURCE_SELECT(V_0287F0_DI_SRC_SEL_DMA);
+    terakan_gfx_command_writer_emit_done(command_writer, packet);
+ }
++
++VKAPI_ATTR void VKAPI_CALL
++terakan_CmdDrawIndirect(VkCommandBuffer const commandBuffer, VkBuffer const buffer,
++                        VkDeviceSize const offset, uint32_t const drawCount, uint32_t const stride)
++{
++   terakan_vk_cmd_draw_indirect(commandBuffer, buffer, offset, drawCount, stride, false);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++terakan_CmdDrawIndexedIndirect(VkCommandBuffer const commandBuffer, VkBuffer const buffer,
++                               VkDeviceSize const offset, uint32_t const drawCount,
++                               uint32_t const stride)
++{
++   terakan_vk_cmd_draw_indirect(commandBuffer, buffer, offset, drawCount, stride, true);
 +}
