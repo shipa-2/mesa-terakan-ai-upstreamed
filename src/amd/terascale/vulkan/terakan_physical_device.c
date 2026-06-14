@@ -440,7 +440,7 @@ terakan_physical_device_get_capabilities(
    features_out->independentBlend = true;
    /* TODO(Triang3l): geometryShader. */
    /* TODO(Triang3l): tessellationShader. */
-   /* TODO(Triang3l): sampleRateShading. */
+   features_out->sampleRateShading = true;
    features_out->dualSrcBlend = true;
    features_out->logicOp = true;
    features_out->multiDrawIndirect = true;
@@ -448,9 +448,9 @@ terakan_physical_device_get_capabilities(
    features_out->depthClamp = true;
    features_out->depthBiasClamp = true;
    features_out->fillModeNonSolid = true;
-   /* TODO(Triang3l): wideLines. */
-   /* TODO(Triang3l): largePoints. */
-   /* TODO(Triang3l): alphaToOne. */
+   features_out->wideLines = true;
+   features_out->largePoints = true;
+   features_out->alphaToOne = true;
    features_out->multiViewport = true;
    features_out->samplerAnisotropy = true;
    features_out->textureCompressionBC = true;
@@ -705,7 +705,15 @@ terakan_physical_device_get_capabilities(
    properties_out->maxViewportDimensions[1] = TERAKAN_IMAGE_MAX_WIDTH_HEIGHT;
    properties_out->viewportBoundsRange[0] = TERAKAN_HW_CONFIG_DRAW_PA_CL_GB_MIN;
    properties_out->viewportBoundsRange[1] = TERAKAN_HW_CONFIG_DRAW_PA_CL_GB_MAX;
-   properties_out->viewportSubPixelBits = 8;
+    properties_out->viewportSubPixelBits = 8;
+
+    /* Wide lines and large points. */
+    properties_out->lineWidthRange[0] = 1.0f;
+    properties_out->lineWidthRange[1] = 8191.0f;
+    properties_out->lineWidthGranularity = 1.0f / 16.0f;
+    properties_out->pointSizeRange[0] = 1.0f;
+    properties_out->pointSizeRange[1] = 8191.0f;
+    properties_out->pointSizeGranularity = 1.0f / 16.0f;
 
    properties_out->minMemoryMapAlignment = min_memory_map_alignment;
 
