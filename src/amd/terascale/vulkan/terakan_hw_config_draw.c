@@ -42,13 +42,6 @@
 #include <stdint.h>
 #include <string.h>
 
-static uint32_t
-terakan_hw_config_draw_context_reg_packet3(
-   struct terakan_gfx_command_writer const * const command_writer)
-{
-   return command_writer->app_config_compute.shader != NULL ? TERAKAN_PACKET3_COMPUTE : 0;
-}
-
 #define TERAKAN_STANDARD_SAMPLE_LOCS(s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13,   \
                                      s14, s15)                                                     \
    {                                                                                               \
@@ -288,8 +281,7 @@ terakan_hw_config_draw_emit_context_register(
    if (unlikely(packet == NULL)) {
       return false;
    }
-   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
    *packet++ = TERAKAN_CONTEXT_REG_OFFSET(register_address_bytes);
    *packet++ = register_value;
    terakan_gfx_command_writer_emit_done(command_writer, packet);
@@ -671,8 +663,7 @@ terakan_hw_config_draw_emit_sq_pgm_fs(struct terakan_gfx_command_writer * const 
       bo = device->meta_shaders_bo;
       va_shr8 = device->meta_shaders_empty_fetch_va_shr8;
    }
-   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
    *packet++ = TERAKAN_CONTEXT_REG_OFFSET(R_0288A4_SQ_PGM_START_FS);
    uint32_t const * const packet_pgm_start = packet;
    *packet++ = va_shr8;
@@ -733,13 +724,11 @@ terakan_hw_config_draw_emit_sq_pgm_vs(struct terakan_gfx_command_writer * const 
    memcpy(packet, shader->stage.vs.spi_vs_out_id, sizeof(uint32_t) * spi_vs_out_id_count);
    packet += spi_vs_out_id_count;
 
-   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
    *packet++ = TERAKAN_CONTEXT_REG_OFFSET(R_0286C4_SPI_VS_OUT_CONFIG);
    *packet++ = shader->stage.vs.spi_vs_out_config;
 
-   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
    *packet++ = TERAKAN_CONTEXT_REG_OFFSET(R_02881C_PA_CL_VS_OUT_CNTL);
    *packet++ = shader->stage.vs.pa_cl_vs_out_cntl;
 
@@ -804,18 +793,15 @@ terakan_hw_config_draw_emit_sq_pgm_ps(struct terakan_gfx_command_writer * const 
    *packet++ = shader->stage.ps.spi_ps_in_control[0];
    *packet++ = shader->stage.ps.spi_ps_in_control[1];
 
-   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
    *packet++ = TERAKAN_CONTEXT_REG_OFFSET(R_0286D8_SPI_INPUT_Z);
    *packet++ = shader->stage.ps.spi_input_z;
 
-   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
    *packet++ = TERAKAN_CONTEXT_REG_OFFSET(R_0286E0_SPI_BARYC_CNTL);
    *packet++ = shader->stage.ps.spi_baryc_cntl;
 
-   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
    *packet++ = TERAKAN_CONTEXT_REG_OFFSET(R_02823C_CB_SHADER_MASK);
    *packet++ = shader->stage.ps.cb_shader_mask;
 
@@ -840,8 +826,7 @@ terakan_hw_config_draw_emit_sq_ring_itemsize(
    while (config->sq_ring_itemsize_.modified_bits) {
       unsigned const ring_index = ffs(config->sq_ring_itemsize_.modified_bits) - 1;
       config->sq_ring_itemsize_.modified_bits &= ~BITFIELD_BIT(ring_index);
-      *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+      *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
       *packet++ = terakan_shader_rings[ring_index].item_size_context_reg_offset;
       *packet++ = config->sq_ring_itemsize_.itemsize_dwords[ring_index];
    }
@@ -1083,8 +1068,7 @@ terakan_hw_config_draw_emit_pa_sc_aa_config_sample_locs(
       return;
    }
 
-   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+   *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
    *packet++ = is_r9xx ? TERAKAN_CONTEXT_REG_OFFSET(CM_R_028BE0_PA_SC_AA_CONFIG)
                        : TERAKAN_CONTEXT_REG_OFFSET(R_028C04_PA_SC_AA_CONFIG);
    *packet++ = pa_sc_aa_config;
@@ -1296,8 +1280,7 @@ terakan_hw_config_draw_emit_db_depth_stencil_buffer(
       stencil_bound ? TERAKAN_CONTEXT_REG_OFFSET(R_02804C_DB_STENCIL_READ_BASE)
                     : TERAKAN_CONTEXT_REG_OFFSET(R_028048_DB_Z_READ_BASE);
    for (uint32_t base_index = 0; base_index <= 1; ++base_index) {
-      *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+      *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
       *packet++ = base_register_offset + 2 * base_index;
       uint32_t const * const packet_base = packet;
       *packet++ = base;
@@ -1491,8 +1474,7 @@ terakan_hw_config_draw_emit_cb_color(struct terakan_gfx_command_writer * const c
          if (unlikely(packet == NULL)) {
             return;
          }
-         *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0) |
-               terakan_hw_config_draw_context_reg_packet3(command_writer);
+         *packet++ = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
          *packet++ = TERAKAN_CONTEXT_REG_OFFSET(R_028C70_CB_COLOR0_INFO) + register_offset_dwords;
          *packet++ = color->info;
          terakan_gfx_command_writer_emit_done(command_writer, packet);
@@ -1510,8 +1492,7 @@ terakan_hw_config_draw_emit_cb_color(struct terakan_gfx_command_writer * const c
          return;
       }
 
-      *packet++ = PKT3(PKT3_SET_CONTEXT_REG, register_count, 0) |
-                  terakan_hw_config_draw_context_reg_packet3(command_writer);
+      *packet++ = PKT3(PKT3_SET_CONTEXT_REG, register_count, 0);
       *packet++ = TERAKAN_CONTEXT_REG_OFFSET(R_028C60_CB_COLOR0_BASE) + register_offset_dwords;
 
       uint32_t * const packet_descriptor = packet;

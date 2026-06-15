@@ -1172,6 +1172,9 @@ terakan_vk_pipeline_graphics_create(struct terakan_device * const device,
    if (fetch_shader_is_static) {
       pipeline->vertex_input.sq_pgm_fetch.layout.attributes_used =
          pipeline->shaders[MESA_SHADER_VERTEX].vs.vertex_attributes_needed;
+      fprintf(stderr, "[TERAKAN] PIPELINE: vertex_attributes_needed=0x%x\n",
+              pipeline->shaders[MESA_SHADER_VERTEX].vs.vertex_attributes_needed);
+      fflush(stderr);
       terakan_vertex_input_create_fs_code(&pipeline->vertex_input.sq_pgm_fetch.layout,
                                           terakan_device_physical_device(device)->chip_info.is_r9xx,
                                           &pipeline->vertex_input.sq_pgm_fetch.resource_usage,
