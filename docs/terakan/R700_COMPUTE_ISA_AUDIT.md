@@ -64,3 +64,35 @@ No rejected dispatch or export-register write was submitted to RV710 to test
 this inference. No kernel modification or validation bypass is authorized by
 this note. The next implementation must resolve both launch and bounded output,
 not just supply a shader with the right ISA opcode.
+
+## Remote module correction (2026-09-06)
+
+Do not infer that the installed remote kernel rejects SX exports from the upstream
+audit above. Read-only inspection of its actual `radeon.ko` found different code.
+The installed and loaded module report matching srcversion
+`522F601355FD49E289807F7`; the copied `radeon.ko.zst` has SHA-256
+`50d4e53498853a4e5331d908a876e7b382719e623c0b44575b5a972c19c0d824`.
+Matching srcversion is supporting identification, not a hash of loaded memory.
+
+In this ELF, `r600_cs_check_reg` starts at `.text+0x69a90`. Its safe-bitmap
+lookup relocates against `.rodata+0x1cd40`. Word `0x120` is `0xffffffdf`:
+register 0x9010 (bit 4) requires special handling, whereas 0x9014 (bit 5) is
+accepted by the bitmap. The special branch at 0x69d15 compares against 0x9010,
+calls `radeon_cs_packet_next_reloc` at 0x69d2d, and adds a relocation-derived
+value to the IB register payload at 0x69d4b. It then returns success. Thus
+there IS an export-base relocation path on this machine. The observed branch
+does not itself couple the separately accepted size register to a BO bound;
+this is not proof that no other check does so. Obtain the exact source before
+using that path for shader writes.
+
+The same module's `r600_cs_parse` packet-opcode decision tree at 0x6bf3e..0x6bf95
+sends opcodes 0x15/0x16 (DISPATCH_DIRECT/INDIRECT) to -EINVAL: below 0x28 the
+accepted comparisons are 0x20, 0x24 and 0x10. This is binary evidence, not an
+actual rejected ioctl or an R7xx hardware launch experiment.
+
+The AMD [R6xx/R7xx register reference](https://www.x.org/docs/AMD/old/R6xx_3D_Registers.pdf),
+printed page 127, defines export base 0x9010 in 256-byte units and export
+aperture 0x9014, conditional on MEM_EXPORT_PRESENT. It describes suppressed
+out-of-range writes and clamped reads, but does not justify guessing the
+size-unit or equality boundary. Those require an exact source/ISA cross-check
+and an eventual sentinel readback. No registers were written during this audit.

@@ -674,6 +674,11 @@ oracle; indirect indexed draws and all indexed hardware execution remain unverif
   AMD documents R7xx compute as an ES variant, but qualifies DISPATCH_DIRECT/INDIRECT
   as Evergreen/Cayman. Upstream DRM's R600 parser also lacks dispatch handling;
   the exact remote kernel source and a bounded MEM_EXPORT path still need auditing.
+  Read-only inspection of the installed remote module subsequently found an export-base
+  relocation handler at 0x9010 and a bitmap-accepted size register at 0x9014, unlike the
+  inspected upstream source. Its opcode tree still rejects DISPATCH_DIRECT/INDIRECT.
+  See the audit's module identity and offsets; no shader export was executed and no
+  relationship between the aperture and BO bounds has yet been established.
 
 - TeraScale 1 (R700) `DB_SHADER_CONTROL`: the runtime emitter no longer sends
   the full Evergreen payload merely because both generations place the
