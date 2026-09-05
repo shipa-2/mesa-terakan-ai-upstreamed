@@ -49,14 +49,11 @@ the LS setup in section 3.2. Sections 9.3.12/13 label DISPATCH_DIRECT/INDIRECT
 Evergreen/Cayman only. The overview's generic DISPATCH wording must not override
 that generation qualification. An exact R7xx launch recipe is still missing.
 
-The inspected upstream Linux [r600_cs.c](https://raw.githubusercontent.com/torvalds/linux/master/drivers/gpu/drm/radeon/r600_cs.c)
-has no DISPATCH handler and rejects unhandled packet-3 opcodes. Its register
-checker accepts the safe bitmap or a handled special register; the
-[safe-register input](https://raw.githubusercontent.com/torvalds/linux/master/drivers/gpu/drm/radeon/reg_srcs/r600)
-does not list SX_MEMORY_EXPORT_BASE (0x9010), and the parser has no named SX
-memory-export handler. A MEM_EXPORT opcode alone therefore does not establish
-a usable, BO-bounded userspace export path. Audit a pinned kernel version and
-the numeric register cases before proposing a kernel change.
+The earlier claim that upstream has no SX memory-export handler was WRONG.
+The web text extraction/search returned no match, but directly downloaded source
+contains `case SX_MEMORY_EXPORT_BASE`, including in Linux v6.12. Absence from
+that search result was not source evidence. No special remote patch follows
+from the module disassembly. See the pinned-source correction below.
 
 This inspection was of upstream source on 2026-09-05, not the exact remote
 7.1.2-zen3-1-zen source: its installed build trees do not contain r600_cs.c.
@@ -67,8 +64,8 @@ not just supply a shader with the right ISA opcode.
 
 ## Remote module correction (2026-09-06)
 
-Do not infer that the installed remote kernel rejects SX exports from the upstream
-audit above. Read-only inspection of its actual `radeon.ko` found different code.
+Do not infer that the installed remote kernel rejects SX exports from the initial
+audit. Read-only inspection of its actual `radeon.ko` contradicted that audit.
 The installed and loaded module report matching srcversion
 `522F601355FD49E289807F7`; the copied `radeon.ko.zst` has SHA-256
 `50d4e53498853a4e5331d908a876e7b382719e623c0b44575b5a972c19c0d824`.
@@ -96,3 +93,24 @@ aperture 0x9014, conditional on MEM_EXPORT_PRESENT. It describes suppressed
 out-of-range writes and clamped reads, but does not justify guessing the
 size-unit or equality boundary. Those require an exact source/ISA cross-check
 and an eventual sentinel readback. No registers were written during this audit.
+
+## Pinned-source correction after the kernel update
+
+The remote machine now runs 7.2.3-zen1-2-zen with matching linux-zen-headers.
+Headers include Module.symvers and generated configuration but not r600_cs.c.
+The [zen tag v7.2.3-zen1](https://github.com/zen-kernel/zen-kernel/tree/c046c30d42937713681e1fee2e7ad6a8bfb20ac6)
+resolves to c046c30d42937713681e1fee2e7ad6a8bfb20ac6. Directly downloaded
+`drivers/gpu/drm/radeon/r600_cs.c`, lines 1382-1391, consumes a relocation and
+adds `gpu_offset >> 8` to SX_MEMORY_EXPORT_BASE. `reg_srcs/r600` line 443
+lists SX_MEMORY_EXPORT_SIZE (0x9014). The track structure and export handler
+do not track an export aperture/BO pair or validate the size against that BO.
+Userspace must not treat acceptance as a bounds check. The exact size encoding
+and safe launch still require implementation evidence before shader writes.
+
+The updated module has srcversion `0AB923142CD537CD5BC2DD3`, matching sysfs,
+and compressed SHA-256
+`13cc44b07a098e9a9ab1c8a73354ae0d30f84543189441e84bfc136f5c22a0b4`.
+Its export handler still compares 0x9010 and performs relocation at .text
+0x69ef5..0x69f34. This agrees with the source path; it is not a reproducible
+whole-module build comparison. No need to request an unknown local patch just
+to locate the export handler. No GPU work was sent by this source/binary audit.

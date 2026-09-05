@@ -675,10 +675,13 @@ oracle; indirect indexed draws and all indexed hardware execution remain unverif
   as Evergreen/Cayman. Upstream DRM's R600 parser also lacks dispatch handling;
   the exact remote kernel source and a bounded MEM_EXPORT path still need auditing.
   Read-only inspection of the installed remote module subsequently found an export-base
-  relocation handler at 0x9010 and a bitmap-accepted size register at 0x9014, unlike the
-  inspected upstream source. Its opcode tree still rejects DISPATCH_DIRECT/INDIRECT.
+  relocation handler at 0x9010 and a bitmap-accepted size register at 0x9014. The claim
+  that upstream lacked this handler was wrong: direct source download finds it too;
+  the web search had missed it. Its opcode tree still rejects DISPATCH_DIRECT/INDIRECT.
   See the audit's module identity and offsets; no shader export was executed and no
-  relationship between the aperture and BO bounds has yet been established.
+  relationship between the aperture and BO bounds has yet been established. Pinned
+  zen v7.2.3-zen1 source relocates the base but does not validate the separately
+  accepted aperture against that BO; kernel acceptance is not a bounds oracle.
 
 - TeraScale 1 (R700) `DB_SHADER_CONTROL`: the runtime emitter no longer sends
   the full Evergreen payload merely because both generations place the
