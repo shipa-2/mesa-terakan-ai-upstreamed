@@ -195,8 +195,10 @@ journal stayed clean. This remains a boundary check, not a substitute for image 
 The opt-in CP-DMA fill probe (`TERAKAN_DEBUG_TERASCALE_1_CP_DMA_FILL=1`) is deliberately not
 counted as working on RV710: three consecutive attempts returned `VK_ERROR_UNKNOWN` (`-13`) from
 the transfer submission path, with no kernel journal entry. The existing copy/readback probes are
-still valid, but fill remains unsupported pending a packet-level audit of R600/R700 fill semantics;
-the submit guard is unchanged.
+still valid, but fill remains unsupported. The classic source confirms why: `r600_clear_buffer()`
+uses `evergreen_cp_dma_clear_buffer()` only for `gfx_level >= EVERGREEN`; R600/R700 take the
+streamout/blitter fallback, so there is no classic R700 CP-DMA fill packet to transcribe. The
+submit guard is unchanged.
 
 The first graphics-state submission has now passed the RV710 kernel parser and fence through the
 complete draw-state and SQK emission when the draw packet itself is replaced by TYPE2 padding.
