@@ -173,9 +173,9 @@ The first B3 CP-DMA packet constraint is now transcribed from classic
 all-ones 21-bit value retained by the Evergreen path. This matters for four-byte fills: the exact
 R700 maximum is `0x001ffff8`, while the old generic cap would emit `0x001ffffc`; 32-byte-aligned
 copies round both to `0x001fffe0`. `terakan_cp_dma_terascale_1_test` checks all three values and
-has the old fill value as a negative control. It proves only packet-size selection on the CPU. No
-CP-DMA packet, data transfer, or readback has yet run on RV710, so B3 and the submit guard remain
-open.
+has the old fill value as a negative control. It proves only packet-size selection on the CPU;
+the hardware evidence is split below by operation, and does not turn the unsupported fill path
+into a supported one. B3 and the submit guard therefore remain open for the unvalidated classes.
 
 That first B3 transfer is now hardware-validated on RV710: the opt-in probe copied 64 bytes from
 one host-visible buffer to another, waited for the submission fence, invalidated the destination,
