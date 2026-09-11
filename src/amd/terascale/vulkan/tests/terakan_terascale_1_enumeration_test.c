@@ -114,7 +114,10 @@ static char const *
 terascale_1_bc1_roundtrip_mode(void)
 {
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_BC1_ROUNDTRIP");
-   return value != NULL && (!strcmp(value, "1") || !strcmp(value, "negative")) ? value : NULL;
+   return value != NULL && (!strcmp(value, "1") || !strcmp(value, "negative") ||
+                            !strcmp(value, "readback") || !strcmp(value, "readback-negative"))
+             ? value
+             : NULL;
 }
 
 static uint32_t
@@ -391,7 +394,7 @@ cleanup:
  * BC1 layout or format filtering on other R700 chips. */
 static uint32_t
 check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevice const device,
-                                 VkQueue const queue, bool const negative)
+                                 VkQueue const queue, bool const negative, bool const to_buffer)
 {
    enum { block_bytes = 8, block_columns = 2, block_rows = 2, image_bytes = 32, buffer_bytes = 40 };
    uint8_t source[buffer_bytes], inverse[image_bytes];
@@ -452,7 +455,8 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
       vkGetImageSubresourceLayout(device, image, &subresource, &image_layout);
       for (uint32_t row = 0; row < block_rows; ++row)
          memcpy(image_mapping + image_layout.offset + row * image_layout.rowPitch,
-                inverse + row * block_columns * block_bytes, block_columns * block_bytes);
+                (to_buffer ? source : inverse) + row * block_columns * block_bytes,
+                block_columns * block_bytes);
    }
    VkBufferCreateInfo const buffer_info = {
       .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -486,7 +490,7 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    if (result == VK_SUCCESS)
       result = vkMapMemory(device, buffer_memory, 0, VK_WHOLE_SIZE, 0, (void **)&buffer_mapping);
    if (result == VK_SUCCESS) {
-      memcpy(buffer_mapping, source, buffer_bytes);
+      memcpy(buffer_mapping, to_buffer ? inverse : source, buffer_bytes);
       VkMappedMemoryRange ranges[2] = {
          {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = image_memory, .size = VK_WHOLE_SIZE},
          {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = buffer_memory, .size = VK_WHOLE_SIZE},
@@ -510,7 +514,8 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
       result = vkBeginCommandBuffer(command_buffer, &begin_info);
    VkImageMemoryBarrier const initial = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-      .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+      .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
+      .dstAccessMask = to_buffer ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT,
       .oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .image = image, .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -524,16 +529,28 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    if (result == VK_SUCCESS) {
       vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                            0, 0, NULL, 0, NULL, 1, &initial);
-      vkCmdCopyBufferToImage(command_buffer, buffer, image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
-      VkImageMemoryBarrier const host = {
-         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-         .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
-         .oldLayout = VK_IMAGE_LAYOUT_GENERAL, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-         .image = image, .subresourceRange = initial.subresourceRange,
-      };
-      vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-                           0, 0, NULL, 0, NULL, 1, &host);
+      if (to_buffer) {
+         vkCmdCopyImageToBuffer(command_buffer, image, VK_IMAGE_LAYOUT_GENERAL, buffer, 1, &region);
+         VkBufferMemoryBarrier const host = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE,
+         };
+         vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                              0, 0, NULL, 1, &host, 0, NULL);
+      } else {
+         vkCmdCopyBufferToImage(command_buffer, buffer, image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+         VkImageMemoryBarrier const host = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_GENERAL, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image, .subresourceRange = initial.subresourceRange,
+         };
+         vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                              0, 0, NULL, 0, NULL, 1, &host);
+      }
       result = vkEndCommandBuffer(command_buffer);
    }
    VkFenceCreateInfo const fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -552,26 +569,40 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    }
    if (result != VK_SUCCESS) {
       fprintf(stderr, "  RV710 linear BC1 %s submission failed with %d\n",
-              negative ? "negative" : "roundtrip", result);
+              to_buffer ? (negative ? "readback-negative" : "readback")
+                        : (negative ? "negative" : "roundtrip"), result);
       failures = 1;
    } else {
       uint32_t mismatches = 0;
-      for (uint32_t row = 0; row < block_rows; ++row)
-         for (uint32_t col = 0; col < block_columns; ++col)
-            for (uint32_t byte = 0; byte < block_bytes; ++byte) {
-               uint32_t const image_index = (row * block_columns + col) * block_bytes + byte;
-               uint8_t const expected = negative ? source[8 + image_index] : source[image_index];
-               if (image_mapping[image_layout.offset + row * image_layout.rowPitch +
-                                 col * block_bytes + byte] != expected)
-                  ++mismatches;
-            }
+      if (to_buffer) {
+         for (uint32_t i = 0; i < buffer_bytes; ++i) {
+            bool const copied = i >= (negative ? 8u : 0u) && i < (negative ? 40u : 32u);
+            uint8_t const expected = copied ? source[i - (negative ? 8u : 0u)] : inverse[i % image_bytes];
+            if (buffer_mapping[i] != expected)
+               ++mismatches;
+         }
+      } else {
+         for (uint32_t row = 0; row < block_rows; ++row)
+            for (uint32_t col = 0; col < block_columns; ++col)
+               for (uint32_t byte = 0; byte < block_bytes; ++byte) {
+                  uint32_t const image_index = (row * block_columns + col) * block_bytes + byte;
+                  uint8_t const expected = negative ? source[8 + image_index] : source[image_index];
+                  if (image_mapping[image_layout.offset + row * image_layout.rowPitch +
+                                    col * block_bytes + byte] != expected)
+                     ++mismatches;
+               }
+      }
       uint32_t const expected_mismatches = 0;
       if (mismatches != expected_mismatches) {
          fprintf(stderr, "  RV710 linear BC1 %s observed %u mismatches, expected %u\n",
-                 negative ? "negative control" : "roundtrip", mismatches, expected_mismatches);
+                 to_buffer ? (negative ? "readback negative control" : "readback")
+                           : (negative ? "negative control" : "roundtrip"),
+                 mismatches, expected_mismatches);
          failures = 1;
       } else {
-         fprintf(stderr, "  RV710 linear BC1 %s completed%s\n", negative ? "negative control" : "roundtrip",
+         fprintf(stderr, "  RV710 linear BC1 %s completed%s\n",
+                 to_buffer ? (negative ? "readback negative control" : "readback")
+                           : (negative ? "negative control" : "roundtrip"),
                  negative ? " with expected buffer offset" : "");
       }
    }
@@ -1539,7 +1570,9 @@ main(void)
             failures +=
                bc1_mode != NULL
                   ? check_rv710_linear_bc1_roundtrip(physical_devices[device_index], device, queue,
-                                                     !strcmp(bc1_mode, "negative"))
+                                                     !strcmp(bc1_mode, "negative") ||
+                                                        !strcmp(bc1_mode, "readback-negative"),
+                                                     !strncmp(bc1_mode, "readback", 8))
                : terascale_1_linear_image_readback_opted_in() ||
                      terascale_1_linear_image_clear_opted_in() ||
                      terascale_1_linear_buffer_upload_opted_in() ||
