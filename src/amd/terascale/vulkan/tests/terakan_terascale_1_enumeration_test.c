@@ -135,6 +135,13 @@ terascale_1_msaa_image_clear_opted_in(void)
 }
 
 static char const *
+terascale_1_application_draw_mode(void)
+{
+   char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW");
+   return value != NULL && (!strcmp(value, "1") || !strcmp(value, "negative")) ? value : NULL;
+}
+
+static char const *
 terascale_1_bc1_roundtrip_mode(void)
 {
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_BC1_ROUNDTRIP");
@@ -1381,7 +1388,8 @@ check_terascale_1_image_layouts(VkDevice const device)
       .tiling = VK_IMAGE_TILING_LINEAR,
       .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+      /* The host->attachment barrier performs this transition before the pass. */
+      .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
    };
    VkImageCreateInfo optimal = linear;
    optimal.extent = (VkExtent3D){300, 50, 1};
@@ -1603,6 +1611,394 @@ cleanup:
    return failures;
 }
 
+/* First application-draw probe: unlike the meta-clear path, this binds the ordinary application
+ * VS/FS pair above, a vertex fetch buffer and a render-pass framebuffer. It is deliberately
+ * opt-in because it reaches the still-unvalidated R700 draw path. The `negative` mode keeps the
+ * command identical but expects the wrong provoking-vertex colour, so a skipped draw or an
+ * unconditional success cannot pass. This does not validate indexed/indirect draws, descriptors,
+ * depth, MSAA or general queue submission. */
+static uint32_t
+check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice const device,
+                             VkQueue const queue, bool const negative)
+{
+   VkPhysicalDeviceMemoryProperties memory_properties;
+   vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+
+   VkImage image = VK_NULL_HANDLE;
+   VkImageView image_view = VK_NULL_HANDLE;
+   VkDeviceMemory image_memory = VK_NULL_HANDLE;
+   uint8_t * image_mapping = NULL;
+   VkBuffer vertex_buffer = VK_NULL_HANDLE;
+   VkDeviceMemory vertex_memory = VK_NULL_HANDLE;
+   uint32_t * vertex_mapping = NULL;
+   VkShaderModule vertex_module = VK_NULL_HANDLE, fragment_module = VK_NULL_HANDLE;
+   VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+   VkRenderPass render_pass = VK_NULL_HANDLE;
+   VkFramebuffer framebuffer = VK_NULL_HANDLE;
+   VkPipeline pipeline = VK_NULL_HANDLE;
+   VkCommandPool command_pool = VK_NULL_HANDLE;
+   VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+   VkFence fence = VK_NULL_HANDLE;
+   uint32_t failures = 0;
+
+   VkImageCreateInfo const image_info = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .imageType = VK_IMAGE_TYPE_2D,
+      .format = VK_FORMAT_R8G8B8A8_UNORM,
+      .extent = {2, 2, 1},
+      .mipLevels = 1,
+      .arrayLayers = 1,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .tiling = VK_IMAGE_TILING_LINEAR,
+      .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+      .initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED,
+   };
+   VkResult result = vkCreateImage(device, &image_info, NULL, &image);
+   VkMemoryRequirements image_requirements;
+   if (result == VK_SUCCESS)
+      vkGetImageMemoryRequirements(device, image, &image_requirements);
+   uint32_t image_memory_type = UINT32_MAX;
+   for (uint32_t type = 0; result == VK_SUCCESS && type < memory_properties.memoryTypeCount; ++type) {
+      if ((image_requirements.memoryTypeBits & ((uint32_t)1 << type)) &&
+          (memory_properties.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+         image_memory_type = type;
+         break;
+      }
+   }
+   VkMemoryAllocateInfo const image_allocate_info = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = result == VK_SUCCESS ? image_requirements.size : 0,
+      .memoryTypeIndex = image_memory_type,
+   };
+   if (result == VK_SUCCESS && image_memory_type == UINT32_MAX)
+      result = VK_ERROR_FEATURE_NOT_PRESENT;
+   if (result == VK_SUCCESS && image_memory_type != UINT32_MAX)
+      result = vkAllocateMemory(device, &image_allocate_info, NULL, &image_memory);
+   if (result == VK_SUCCESS)
+      result = vkBindImageMemory(device, image, image_memory, 0);
+   if (result == VK_SUCCESS)
+      result = vkMapMemory(device, image_memory, 0, VK_WHOLE_SIZE, 0, (void **)&image_mapping);
+   if (result != VK_SUCCESS) {
+      fprintf(stderr, "  RV710 application-draw image setup failed with %d\n", result);
+      failures = 1;
+      goto cleanup;
+   }
+   VkImageSubresource const subresource = {
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .arrayLayer = 0,
+   };
+   VkSubresourceLayout image_layout;
+   vkGetImageSubresourceLayout(device, image, &subresource, &image_layout);
+   for (uint32_t y = 0; y < 2; ++y)
+      for (uint32_t x = 0; x < 2; ++x)
+         ((uint32_t *)(image_mapping + image_layout.offset + y * image_layout.rowPitch))[x] =
+            UINT32_C(0xdeadbeef);
+   VkMappedMemoryRange const image_flush = {
+      .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+      .memory = image_memory,
+      .size = VK_WHOLE_SIZE,
+   };
+   result = vkFlushMappedMemoryRanges(device, 1, &image_flush);
+   if (result != VK_SUCCESS) {
+      failures = 1;
+      goto cleanup;
+   }
+
+   VkImageViewCreateInfo const image_view_info = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .image = image,
+      .viewType = VK_IMAGE_VIEW_TYPE_2D,
+      .format = VK_FORMAT_R8G8B8A8_UNORM,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+   };
+   result = vkCreateImageView(device, &image_view_info, NULL, &image_view);
+   if (result != VK_SUCCESS) {
+      failures = 1;
+      goto cleanup;
+   }
+
+   VkBufferCreateInfo const vertex_buffer_info = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = 3 * 4 * sizeof(uint32_t),
+      .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+   };
+   result = vkCreateBuffer(device, &vertex_buffer_info, NULL, &vertex_buffer);
+   VkMemoryRequirements vertex_requirements;
+   if (result == VK_SUCCESS)
+      vkGetBufferMemoryRequirements(device, vertex_buffer, &vertex_requirements);
+   uint32_t vertex_memory_type = UINT32_MAX;
+   for (uint32_t type = 0; result == VK_SUCCESS && type < memory_properties.memoryTypeCount; ++type) {
+      if ((vertex_requirements.memoryTypeBits & ((uint32_t)1 << type)) &&
+          (memory_properties.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+         vertex_memory_type = type;
+         break;
+      }
+   }
+   VkMemoryAllocateInfo const vertex_allocate_info = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = result == VK_SUCCESS ? vertex_requirements.size : 0,
+      .memoryTypeIndex = vertex_memory_type,
+   };
+   if (result == VK_SUCCESS && vertex_memory_type == UINT32_MAX)
+      result = VK_ERROR_FEATURE_NOT_PRESENT;
+   if (result == VK_SUCCESS && vertex_memory_type != UINT32_MAX)
+      result = vkAllocateMemory(device, &vertex_allocate_info, NULL, &vertex_memory);
+   if (result == VK_SUCCESS)
+      result = vkBindBufferMemory(device, vertex_buffer, vertex_memory, 0);
+   if (result == VK_SUCCESS)
+      result = vkMapMemory(device, vertex_memory, 0, VK_WHOLE_SIZE, 0, (void **)&vertex_mapping);
+   if (result != VK_SUCCESS || vertex_mapping == NULL) {
+      fprintf(stderr, "  RV710 application-draw vertex setup failed with %d\n", result);
+      failures = 1;
+      goto cleanup;
+   }
+   uint32_t const vertex_values[3] = {UINT32_C(0x10203040), UINT32_C(0x55667788),
+                                      UINT32_C(0x90abcdef)};
+   for (uint32_t vertex = 0; vertex < 3; ++vertex)
+      vertex_mapping[vertex * 4] = vertex_values[vertex];
+   VkMappedMemoryRange const vertex_flush = {
+      .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+      .memory = vertex_memory,
+      .size = VK_WHOLE_SIZE,
+   };
+   result = vkFlushMappedMemoryRanges(device, 1, &vertex_flush);
+   if (result != VK_SUCCESS) {
+      failures = 1;
+      goto cleanup;
+   }
+
+   VkShaderModuleCreateInfo const vertex_module_info = {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .codeSize = sizeof(application_vertex_spirv),
+      .pCode = application_vertex_spirv,
+   };
+   result = vkCreateShaderModule(device, &vertex_module_info, NULL, &vertex_module);
+   VkShaderModuleCreateInfo const fragment_module_info = {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .codeSize = sizeof(application_fragment_spirv),
+      .pCode = application_fragment_spirv,
+   };
+   if (result == VK_SUCCESS)
+      result = vkCreateShaderModule(device, &fragment_module_info, NULL, &fragment_module);
+   VkPipelineLayoutCreateInfo const pipeline_layout_info = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+   };
+   if (result == VK_SUCCESS)
+      result = vkCreatePipelineLayout(device, &pipeline_layout_info, NULL, &pipeline_layout);
+   VkAttachmentDescription const attachment = {
+      .format = VK_FORMAT_R8G8B8A8_UNORM,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+      .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+   };
+   VkAttachmentReference const color_reference = {
+      .attachment = 0,
+      .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+   };
+   VkSubpassDescription const subpass = {
+      .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+      .colorAttachmentCount = 1,
+      .pColorAttachments = &color_reference,
+   };
+   VkRenderPassCreateInfo const render_pass_info = {
+      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+      .attachmentCount = 1,
+      .pAttachments = &attachment,
+      .subpassCount = 1,
+      .pSubpasses = &subpass,
+   };
+   if (result == VK_SUCCESS)
+      result = vkCreateRenderPass(device, &render_pass_info, NULL, &render_pass);
+   VkFramebufferCreateInfo const framebuffer_info = {
+      .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      .renderPass = render_pass,
+      .attachmentCount = 1,
+      .pAttachments = &image_view,
+      .width = 2,
+      .height = 2,
+      .layers = 1,
+   };
+   if (result == VK_SUCCESS)
+      result = vkCreateFramebuffer(device, &framebuffer_info, NULL, &framebuffer);
+
+   VkPipelineShaderStageCreateInfo const stages[2] = {
+      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+       .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vertex_module, .pName = "main"},
+      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+       .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fragment_module, .pName = "main"},
+   };
+   VkVertexInputBindingDescription const vertex_binding = {
+      .binding = 0, .stride = 16, .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+   };
+   VkVertexInputAttributeDescription const vertex_attribute = {
+      .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32A32_UINT,
+   };
+   VkPipelineVertexInputStateCreateInfo const vertex_input = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+      .vertexBindingDescriptionCount = 1, .pVertexBindingDescriptions = &vertex_binding,
+      .vertexAttributeDescriptionCount = 1, .pVertexAttributeDescriptions = &vertex_attribute,
+   };
+   VkPipelineInputAssemblyStateCreateInfo const input_assembly = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+   };
+   VkViewport const viewport = {.width = 2.0F, .height = 2.0F, .maxDepth = 1.0F};
+   VkRect2D const scissor = {.extent = {2, 2}};
+   VkPipelineViewportStateCreateInfo const viewport_state = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+      .viewportCount = 1, .pViewports = &viewport, .scissorCount = 1, .pScissors = &scissor,
+   };
+   VkPipelineRasterizationStateCreateInfo const rasterization = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+      .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE, .lineWidth = 1.0F,
+   };
+   VkPipelineMultisampleStateCreateInfo const multisample = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+   };
+   VkPipelineColorBlendAttachmentState const blend_attachment = {
+      .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+   };
+   VkPipelineColorBlendStateCreateInfo const blend = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+      .attachmentCount = 1, .pAttachments = &blend_attachment,
+   };
+   VkGraphicsPipelineCreateInfo const pipeline_info = {
+      .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+      .stageCount = 2, .pStages = stages, .pVertexInputState = &vertex_input,
+      .pInputAssemblyState = &input_assembly, .pViewportState = &viewport_state,
+      .pRasterizationState = &rasterization, .pMultisampleState = &multisample,
+      .pColorBlendState = &blend, .layout = pipeline_layout, .renderPass = render_pass,
+   };
+   if (result == VK_SUCCESS)
+      result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &pipeline);
+   if (result != VK_SUCCESS) {
+      fprintf(stderr, "  RV710 application-draw pipeline creation failed with %d\n", result);
+      failures = 1;
+      goto cleanup;
+   }
+
+   VkCommandPoolCreateInfo const command_pool_info = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .queueFamilyIndex = 0,
+   };
+   result = vkCreateCommandPool(device, &command_pool_info, NULL, &command_pool);
+   VkCommandBufferAllocateInfo const command_buffer_info = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandPool = command_pool,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1,
+   };
+   if (result == VK_SUCCESS)
+      result = vkAllocateCommandBuffers(device, &command_buffer_info, &command_buffer);
+   VkCommandBufferBeginInfo const begin_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+   if (result == VK_SUCCESS)
+      result = vkBeginCommandBuffer(command_buffer, &begin_info);
+   VkImageMemoryBarrier const to_attachment = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
+      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED,
+      .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = image,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+   };
+   if (result == VK_SUCCESS)
+      vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT,
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1,
+                           &to_attachment);
+   VkRenderPassBeginInfo const render_begin = {
+      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+      .renderPass = render_pass,
+      .framebuffer = framebuffer,
+      .renderArea = {{0, 0}, {2, 2}},
+   };
+   if (result == VK_SUCCESS) {
+      vkCmdBeginRenderPass(command_buffer, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
+      VkDeviceSize const vertex_offset = 0;
+      vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+      vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, &vertex_offset);
+      vkCmdDraw(command_buffer, 3, 1, 0, 0);
+      vkCmdEndRenderPass(command_buffer);
+   }
+   VkImageMemoryBarrier const to_host = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+      .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = image,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+   };
+   if (result == VK_SUCCESS)
+      vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &to_host);
+   if (result == VK_SUCCESS)
+      result = vkEndCommandBuffer(command_buffer);
+   VkFenceCreateInfo const fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+   if (result == VK_SUCCESS)
+      result = vkCreateFence(device, &fence_info, NULL, &fence);
+   VkSubmitInfo const submit_info = {
+      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &command_buffer,
+   };
+   if (result == VK_SUCCESS)
+      result = vkQueueSubmit(queue, 1, &submit_info, fence);
+   if (result == VK_SUCCESS)
+      result = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_C(5000000000));
+   if (result != VK_SUCCESS) {
+      fprintf(stderr, "  RV710 application-draw submission failed with %d\n", result);
+      failures = 1;
+      goto cleanup;
+   }
+   VkMappedMemoryRange const image_invalidate = {
+      .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = image_memory, .size = VK_WHOLE_SIZE,
+   };
+   vkInvalidateMappedMemoryRanges(device, 1, &image_invalidate);
+   uint32_t const expected = negative ? vertex_values[0] : vertex_values[2];
+   uint32_t mismatches = 0;
+   for (uint32_t y = 0; y < 2; ++y) {
+      uint32_t const * const row = (uint32_t const *)(image_mapping + image_layout.offset +
+                                                       y * image_layout.rowPitch);
+      for (uint32_t x = 0; x < 2; ++x)
+         mismatches += row[x] != expected;
+   }
+   if ((negative && mismatches != 4) || (!negative && mismatches != 0)) {
+      fprintf(stderr, "  RV710 application-draw %s mismatches=%u expected=%u\n",
+              negative ? "negative" : "readback", mismatches, negative ? 4 : 0);
+      failures = 1;
+   } else {
+      fprintf(stderr, "  RV710 application-draw %s completed mismatches=%u\n",
+              negative ? "negative control" : "readback", mismatches);
+   }
+
+cleanup:
+   if (fence != VK_NULL_HANDLE) vkDestroyFence(device, fence, NULL);
+   if (command_buffer != VK_NULL_HANDLE)
+      vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+   if (command_pool != VK_NULL_HANDLE) vkDestroyCommandPool(device, command_pool, NULL);
+   if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, pipeline, NULL);
+   if (framebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, framebuffer, NULL);
+   if (render_pass != VK_NULL_HANDLE) vkDestroyRenderPass(device, render_pass, NULL);
+   if (pipeline_layout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, pipeline_layout, NULL);
+   if (fragment_module != VK_NULL_HANDLE) vkDestroyShaderModule(device, fragment_module, NULL);
+   if (vertex_module != VK_NULL_HANDLE) vkDestroyShaderModule(device, vertex_module, NULL);
+   if (vertex_mapping != NULL) vkUnmapMemory(device, vertex_memory);
+   if (image_mapping != NULL) vkUnmapMemory(device, image_memory);
+   if (vertex_buffer != VK_NULL_HANDLE) vkDestroyBuffer(device, vertex_buffer, NULL);
+   if (vertex_memory != VK_NULL_HANDLE) vkFreeMemory(device, vertex_memory, NULL);
+   if (image_view != VK_NULL_HANDLE) vkDestroyImageView(device, image_view, NULL);
+   if (image != VK_NULL_HANDLE) vkDestroyImage(device, image, NULL);
+   if (image_memory != VK_NULL_HANDLE) vkFreeMemory(device, image_memory, NULL);
+   return failures;
+}
+
 int
 main(void)
 {
@@ -1707,9 +2103,13 @@ main(void)
                fprintf(stderr, "  TeraScale 1 queue submission remains safely disabled\n");
             }
          } else if (properties.deviceID == 0x954f) {
+            char const * const application_draw_mode = terascale_1_application_draw_mode();
             char const * const bc1_mode = terascale_1_bc1_roundtrip_mode();
             failures +=
-               bc1_mode != NULL
+               application_draw_mode != NULL
+                  ? check_rv710_application_draw(physical_devices[device_index], device, queue,
+                                                 !strcmp(application_draw_mode, "negative"))
+               : bc1_mode != NULL
                   ? check_rv710_linear_bc1_roundtrip(physical_devices[device_index], device, queue,
                                                      !strcmp(bc1_mode, "negative") ||
                                                         !strcmp(bc1_mode, "readback-negative") ||
@@ -1721,6 +2121,7 @@ main(void)
                      terascale_1_linear_buffer_upload_opted_in() ||
                      terascale_1_tiled_image_roundtrip_opted_in() ||
                      terascale_1_tiled_image_clear_opted_in() ||
+                     terascale_1_application_draw_mode() ||
                      terascale_1_msaa_image_clear_opted_in()
                   ? check_rv710_linear_image_readback(
                        physical_devices[device_index], device, queue,

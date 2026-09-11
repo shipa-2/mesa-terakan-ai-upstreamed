@@ -738,6 +738,17 @@ same split between `r600_state.c` and `evergreen_state.c`.
   geometry ring setup and VGT GS mode are still unported, so this does not yet
   establish a working geometry-shader pipeline.
 
+- An opt-in RV710 application-draw probe now binds the existing ordinary VS/FS,
+  a host-visible three-vertex R32G32B32A32_UINT buffer and a 2x2 linear color
+  attachment, then reads the rendered value back through an explicit host
+  barrier. `TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW=1` expects the last
+  provoking vertex; `...=negative` expects the deliberately wrong first vertex
+  and must report four mismatches. The probe is intentionally not part of the
+  default suite and does not establish indexed/indirect, descriptor, depth,
+  MSAA, or general queue correctness. It has only passed compilation and the
+  CPU suite so far; the RV710 is awaiting a clean reboot after an earlier
+  metadata experiment locked ring 0.
+
 - TeraScale 1 no longer replays the Evergreen-only draw-constant array after
   the dedicated per-indirect-buffer begin atom. That atom already transcribes
   the complete applicable `r600_init_atom_start_cs()` baseline and has an exact
