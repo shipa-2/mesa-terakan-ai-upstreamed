@@ -115,6 +115,26 @@ Its export handler still compares 0x9010 and performs relocation at .text
 whole-module build comparison. No need to request an unknown local patch just
 to locate the export handler. No GPU work was sent by this source/binary audit.
 
+## Header and userspace rebuild check after the next reboot
+
+On 2026-09-11 the remote host booted `7.2.3-zen1-3-zen` and has the matching
+`linux-zen-headers 7.2.3.zen1-3` package. The kernel build Makefile exists at
+`/usr/lib/modules/7.2.3-zen1-3-zen/build/Makefile`. A deliberately minimal,
+unloaded out-of-tree module was compiled against that tree; its resulting
+`vermagic` is `7.2.3-zen1-3-zen SMP preempt mod_unload`. This proves that the
+installed headers, generated configuration and module build scripts agree with
+the running kernel. It does **not** rebuild, replace or validate the in-kernel
+`radeon` module: the header package intentionally contains no
+`drivers/gpu/drm/radeon/r600_cs.c` source tree.
+
+The remote Terakan checkout at `f5133bef4e2` was also rebuilt with Ninja from
+source, then its guarded TeraScale 1 enumeration executable ran against both
+the RV710 (`1002:954f`) and RV610 (`1002:94c1`). It passed image-layout and
+application VS/FS-compilation checks, retained the submit refusal for both
+devices, and left no new kernel-journal messages. This is a source-build and
+pre-submit smoke result only; it neither exercises `SX_MEMORY_EXPORT_*` nor
+proves an ES launch, a draw, a compute dispatch or memory bounds.
+
 ## Assembler encoding oracle
 
 `terakan_shader_generation_test` now assembles an indexed four-DWORD MEM_EXPORT
