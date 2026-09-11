@@ -349,6 +349,11 @@ The combined `mip-layer` variant selects level 1/layer 1 of a two-level, two-lay
 passed 3/3 on RV710 with no journal messages. Its `mip-layer-negative` control instead copies
 level 0/layer 0 while retaining the level-1/layer-1 oracle; it observed all 8385 expected
 mismatches and PASS. This is a combined selector check only, not full mip-chain or array support.
+The TeraScale 1 linear buffer-image path also operates on compressed blocks: BC1 regions are
+translated to 4x4 block coordinates, use `bytes_per_block == 8`, and CP-DMA row/slice pitches are
+checked in blocks before emission. This source-path evidence is not a GPU BC1 readback; a bounded
+compressed-format oracle is still required, and tiled BC1 remains explicitly rejected until its
+block-addressing path is measured.
 The existing CPU tiling test also fixes this exact fixture: 384x144 base, 256x128 padded mip,
 0x36000 mip offset and 0x56000 total bytes. Adding 256 bytes to the production mip-offset output
 failed its new assertion; restoring the calculation passed. The mutation was CPU-only and was
