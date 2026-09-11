@@ -745,9 +745,10 @@ same split between `r600_state.c` and `evergreen_state.c`.
   provoking vertex; `...=negative` expects the deliberately wrong first vertex
   and must report four mismatches. The probe is intentionally not part of the
   default suite and does not establish indexed/indirect, descriptor, depth,
-  MSAA, or general queue correctness. It has only passed compilation and the
-  CPU suite so far; the RV710 is awaiting a clean reboot after an earlier
-  metadata experiment locked ring 0.
+  MSAA, or general queue correctness. The R700 build and the default remote
+  RV710 suite both pass 14/14 CPU and 69/69 GPU without opt-in submission.
+  The RV710 is still awaiting a clean reboot after an earlier metadata
+  experiment locked ring 0, so this probe has not yet run on hardware.
 
 - TeraScale 1 no longer replays the Evergreen-only draw-constant array after
   the dedicated per-indirect-buffer begin atom. That atom already transcribes
