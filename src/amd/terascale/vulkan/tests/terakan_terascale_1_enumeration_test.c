@@ -127,6 +127,13 @@ terascale_1_tiled_image_clear_opted_in(void)
                             !strcmp(value, "mip-layer-negative"));
 }
 
+static bool
+terascale_1_msaa_image_clear_opted_in(void)
+{
+   char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_MSAA_IMAGE_CLEAR");
+   return value != NULL && (!strcmp(value, "2") || !strcmp(value, "4"));
+}
+
 static char const *
 terascale_1_bc1_roundtrip_mode(void)
 {
@@ -681,6 +688,7 @@ enum rv710_linear_image_operation {
    RV710_LINEAR_BUFFER_UPLOAD,
    RV710_TILED_IMAGE_ROUNDTRIP,
    RV710_TILED_IMAGE_CLEAR,
+   RV710_MSAA_IMAGE_CLEAR,
 };
 
 static uint32_t
@@ -691,6 +699,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
    char const * const macro_variant = getenv("TERAKAN_DEBUG_TERASCALE_1_MACROTILED_ROUNDTRIP");
    char const * const tiled_clear_variant =
       getenv("TERAKAN_DEBUG_TERASCALE_1_TILED_IMAGE_CLEAR");
+   bool const msaa_clear = operation == RV710_MSAA_IMAGE_CLEAR;
    bool const meta_state_only = getenv("TERAKAN_DEBUG_TERASCALE_1_META_STATE_ONLY") != NULL;
    bool const offset_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                             !strcmp(macro_variant, "offset");
@@ -776,7 +785,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
       .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
       .initialLayout = operation == RV710_TILED_IMAGE_ROUNDTRIP ||
-                          operation == RV710_TILED_IMAGE_CLEAR
+                          operation == RV710_TILED_IMAGE_CLEAR || msaa_clear
                           ? VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_GENERAL,
    };
    VkResult result = vkCreateImage(device, &image_info, NULL, &image);
@@ -836,10 +845,17 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
       goto cleanup;
    }
 
-   if (operation == RV710_TILED_IMAGE_ROUNDTRIP || operation == RV710_TILED_IMAGE_CLEAR) {
+   if (operation == RV710_TILED_IMAGE_ROUNDTRIP || operation == RV710_TILED_IMAGE_CLEAR ||
+       msaa_clear) {
       VkImageCreateInfo tiled_image_info = image_info;
       tiled_image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
       tiled_image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      if (msaa_clear) {
+         tiled_image_info.samples = !strcmp(getenv("TERAKAN_DEBUG_TERASCALE_1_MSAA_IMAGE_CLEAR"),
+                                            "4")
+                                       ? VK_SAMPLE_COUNT_4_BIT
+                                       : VK_SAMPLE_COUNT_2_BIT;
+      }
       if (mip_copy) {
          tiled_image_info.extent.width *= 2;
          tiled_image_info.extent.height *= 2;
@@ -920,8 +936,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
    }
    for (uint32_t texel = 0; texel < width * height; ++texel)
       buffer_mapping[texel] =
-         operation == RV710_LINEAR_BUFFER_UPLOAD || operation == RV710_TILED_IMAGE_ROUNDTRIP ||
-            operation == RV710_TILED_IMAGE_CLEAR
+             operation == RV710_LINEAR_BUFFER_UPLOAD || operation == RV710_TILED_IMAGE_ROUNDTRIP ||
+                operation == RV710_TILED_IMAGE_CLEAR || msaa_clear
             ? source_words[texel]
             : inverse_words[texel];
    VkMappedMemoryRange const buffer_flush = {
@@ -1056,7 +1072,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             vkCmdClearColorImage(command_buffer, tiled_image, VK_IMAGE_LAYOUT_GENERAL,
                                  &other_layer_colour, 1, &other_layer_range);
          }
-         if (operation == RV710_TILED_IMAGE_CLEAR) {
+         if (operation == RV710_TILED_IMAGE_CLEAR || msaa_clear) {
             VkImageSubresourceRange const target_clear_range = {
                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                .baseMipLevel = clear_mip_layer ? 1 : 0,
@@ -1113,8 +1129,18 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             .dstOffset = {offset_copy ? 3 : 0, offset_copy ? 1 : 0, 0},
             .extent = {offset_copy ? width - 4 : width, offset_copy ? height - 3 : height, 1},
          };
-         vkCmdCopyImage(command_buffer, tiled_image, VK_IMAGE_LAYOUT_GENERAL, image,
-                        VK_IMAGE_LAYOUT_GENERAL, 1, &image_region);
+         if (msaa_clear) {
+            VkImageResolve const resolve_region = {
+               .srcSubresource = image_region.srcSubresource,
+               .dstSubresource = image_region.dstSubresource,
+               .extent = image_region.extent,
+            };
+            vkCmdResolveImage(command_buffer, tiled_image, VK_IMAGE_LAYOUT_GENERAL, image,
+                              VK_IMAGE_LAYOUT_GENERAL, 1, &resolve_region);
+         } else {
+            vkCmdCopyImage(command_buffer, tiled_image, VK_IMAGE_LAYOUT_GENERAL, image,
+                           VK_IMAGE_LAYOUT_GENERAL, 1, &image_region);
+         }
          vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                               VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &barriers[1]);
       }
@@ -1137,6 +1163,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
               : operation == RV710_LINEAR_BUFFER_UPLOAD ? "buffer upload"
               : operation == RV710_TILED_IMAGE_ROUNDTRIP ? "tiled roundtrip"
               : operation == RV710_TILED_IMAGE_CLEAR ? "tiled clear"
+              : msaa_clear ? "MSAA clear/resolve"
                                                         : "readback",
               result);
       failures = 1;
@@ -1159,7 +1186,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             (uint32_t const *)(image_mapping + image_layout.offset + y * image_layout.rowPitch);
          for (uint32_t x = 0; x < width; ++x) {
             uint32_t expected =
-               (operation == RV710_LINEAR_IMAGE_CLEAR || operation == RV710_TILED_IMAGE_CLEAR) &&
+               (operation == RV710_LINEAR_IMAGE_CLEAR || operation == RV710_TILED_IMAGE_CLEAR ||
+                msaa_clear) &&
                   !meta_state_only
                   ? clear_word
                   : source_words[y * width + x];
@@ -1176,8 +1204,11 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                if (!layer_negative && !mip_layer_negative && !clear_layer_negative) {
                   fprintf(stderr,
                           "  RV710 linear image %s mismatch at (%u,%u): got 0x%08x expected 0x%08x\n",
-                          operation == RV710_LINEAR_IMAGE_CLEAR || operation == RV710_TILED_IMAGE_CLEAR
-                             ? (meta_state_only ? "state-only clear" : "clear")
+                          operation == RV710_LINEAR_IMAGE_CLEAR || operation == RV710_TILED_IMAGE_CLEAR ||
+                             msaa_clear
+                             ? (meta_state_only ? "state-only clear"
+                                : msaa_clear ? "MSAA clear/resolve"
+                                : "clear")
                           : operation == RV710_TILED_IMAGE_ROUNDTRIP ? "tiled roundtrip"
                           : operation == RV710_TILED_IMAGE_CLEAR ? "tiled clear"
                                                                    : "buffer upload",
@@ -1199,9 +1230,12 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
       }
       if (!failures)
          fprintf(stderr, "  RV710 %s image %ux%u %s readback completed\n",
-                 operation == RV710_TILED_IMAGE_CLEAR ? "tiled" : "linear", width, height,
-                 operation == RV710_LINEAR_IMAGE_CLEAR || operation == RV710_TILED_IMAGE_CLEAR
+                 operation == RV710_TILED_IMAGE_CLEAR || msaa_clear ? "tiled" : "linear", width,
+                 height,
+                 operation == RV710_LINEAR_IMAGE_CLEAR || operation == RV710_TILED_IMAGE_CLEAR ||
+                    msaa_clear
                     ? (meta_state_only ? "state-only clear"
+                       : msaa_clear ? "MSAA clear/resolve"
                        : operation == RV710_TILED_IMAGE_CLEAR ? "tiled clear" : "clear")
                  : operation == RV710_TILED_IMAGE_ROUNDTRIP ? "tiled roundtrip"
                                                              : "buffer upload");
@@ -1686,13 +1720,15 @@ main(void)
                      terascale_1_linear_image_clear_opted_in() ||
                      terascale_1_linear_buffer_upload_opted_in() ||
                      terascale_1_tiled_image_roundtrip_opted_in() ||
-                     terascale_1_tiled_image_clear_opted_in()
+                     terascale_1_tiled_image_clear_opted_in() ||
+                     terascale_1_msaa_image_clear_opted_in()
                   ? check_rv710_linear_image_readback(
                        physical_devices[device_index], device, queue,
                        terascale_1_linear_image_clear_opted_in()     ? RV710_LINEAR_IMAGE_CLEAR
                        : terascale_1_tiled_image_roundtrip_opted_in()
                           ? RV710_TILED_IMAGE_ROUNDTRIP
                        : terascale_1_tiled_image_clear_opted_in() ? RV710_TILED_IMAGE_CLEAR
+                       : terascale_1_msaa_image_clear_opted_in() ? RV710_MSAA_IMAGE_CLEAR
                        : terascale_1_linear_buffer_upload_opted_in() ? RV710_LINEAR_BUFFER_UPLOAD
                                                                      : RV710_LINEAR_IMAGE_READBACK)
                : terascale_1_cp_dma_large_copy_opted_in()
