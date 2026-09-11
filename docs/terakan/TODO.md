@@ -119,6 +119,12 @@ classic Gallium R600 driver that has supported this hardware for years).
 | Replace the hand-written Evergreen meta shader bytecode (blit/resolve/clear/copy/query, all of `src/amd/terascale/vulkan/meta/`) with generation-neutral NIR | 4/5 | 5/5 | `terakan_meta_nir_compile()` now lets meta operations use `nir_builder` and compile through SFN with the runtime chip generation, including `ISA_CC_R700`; it also performs the input-variable and resource-binding setup required by this backend. The first NIR meta shader is in use, but the remaining hand-assembled Evergreen shaders still need conversion and R700 readback validation | Each meta operation this driver depends on (at minimum blit and clear) passes its existing readback test on TeraScale 1 hardware |
 | Recognize R600/R700 PCI IDs and correctly plumb `gfx_level` through the NIR shader path for real application shaders | 4/5 | 2/5 | Production PCI lookup and `terakan_shader_generation_test` now consume the same complete `r600_pci_ids.h` table. The actual runtime family selects `R600`/`ISA_CC_R600`, `R700`/`ISA_CC_R700`, Evergreen or Cayman for NIR optimization, SFN translation, bytecode assembly and ISA initialization. NIR compiler options now follow classic `r600_screen_create()` too: pre-Evergreen lowers bit count/reverse, unrolls indirect sampler indexing, does not advertise BFE/BFM/BFI, and keeps non-zero-based vertex IDs; Evergreen behavior is unchanged. The existing R700 enumeration test additionally creates a real application VS/FS graphics pipeline without submitting it. Pipeline compilation is hardware-tested separately on RV710; rendering remains blocked by the deliberate submit guard | A real application vertex/fragment shader renders correctly on TeraScale 1 after command submission is safely enabled |
 
+Clarification for the long per-draw summary above: its earlier sentence saying that
+conservative-Z still needs a classic-R700 placement is superseded. Valid
+`ANY`/`LESS`/`GREATER` modes now go through paired R700
+`DB_RENDER_CONTROL`/`DB_RENDER_OVERRIDE` state; R600 admits only `ANY`.
+This is packet-oracle coverage only, not a submitted rendering result.
+
 TeraScale 1 submission has a deliberately narrow diagnostic opt-in: only
 `TERAKAN_DEBUG_TERASCALE_1_SUBMIT=1` reaches the winsys. With the variable absent, or with any
 other value including `0`, `terakan_queue_submit` still returns `VK_ERROR_DEVICE_LOST`. This is
