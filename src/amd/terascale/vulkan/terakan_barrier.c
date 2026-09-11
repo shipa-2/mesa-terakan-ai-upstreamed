@@ -543,6 +543,19 @@ terakan_barrier_initialize_color_metadata(
       return;
    }
 
+   /* The classic R600/R700 driver does not provide a CP-DMA fill path for initializing FMASK and
+    * CMASK. terakan_cp_dma_fill() uses the Evergreen packet encoding, which the RV710 parser
+    * rejected during an MSAA clear as "CP DMA src buffer too small" (see the RV710 probe recorded
+    * in docs/terakan/TODO.md). Do not emit that packet on TeraScale 1: an application-side
+    * command-buffer error is safer than sending a malformed stream to the kernel. This leaves
+    * MSAA color initialization/resolve unsupported until a R700-specific metadata initialization
+    * mechanism is implemented and read back on hardware.
+    */
+   if (terakan_gfx_command_writer_physical_device(command_writer)->chip_info.is_terascale_1) {
+      vk_command_buffer_set_error(&command_writer->base.command_buffer->vk, VK_ERROR_UNKNOWN);
+      return;
+   }
+
    uint32_t const sample_count_log2 =
       (uint32_t)terakan_image_vk_sample_count_to_hw_log2(image->vk.samples, false);
    static uint32_t const identity_fmask[4] = {0x00000000, 0x04040404, 0xE4E4E4E4, 0x76543210};

@@ -292,6 +292,15 @@ negative mode observed all 8385 expected mismatches every time, with no kernel-j
 suppressed for that intentional negative control. This is a combined selector result, not a claim
 that every mip/layer layout or format is correct.
 
+The opt-in `TERAKAN_DEBUG_TERASCALE_1_MSAA_IMAGE_CLEAR=2` probe did not establish an R700
+resolve path. On RV710 it reached FMASK/CMASK initialization and the kernel rejected the
+Evergreen-shaped CP-DMA fill with `CP DMA src buffer too small (67380228 20480)`, returning
+`VK_ERROR_DEVICE_LOST`. This was a safety failure, not a readback result, and the packet was not
+repeated. `terakan_barrier_initialize_color_metadata()` now records a command-buffer error for
+TeraScale 1 before emitting that fill; MSAA color metadata initialization, clear and resolve remain
+unsupported until a R700-specific mechanism is implemented and read back. The ordinary submit
+guard is unchanged.
+
 The next image-to-buffer attempt established a separate safety boundary. Its generation-neutral
 NIR shader still writes the destination with `MEM_RAT`, but the R600/R700 CB converter deliberately
 rejects Evergreen-shaped buffer UAV descriptors. Letting the draw continue with that UAV unbound
