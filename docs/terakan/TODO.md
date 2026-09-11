@@ -380,6 +380,14 @@ Evergreen `INDEX_BASE`/`INDEX_BUFFER_SIZE`, and `vkCmdDrawIndexed` carries the a
 40-bit address in `PKT3_DRAW_INDEX` with an immediate DRM relocation. The exact packet has a CPU
 oracle; indirect indexed draws and all indexed hardware execution remain unverified.
 
+The existing `terakan_vertex_fetch_bounds_probe` was attempted on RV710 with
+`TERAKAN_TEST_DEVICE="TeraScale 1"` and the submit diagnostic enabled. It selected
+`AMD TeraScale 1 RV710 (Terakan)`, but `vkEndCommandBuffer` returned `VK_ERROR_DEVICE_LOST`
+before a queue submission, because the probe requires the still-unvalidated application draw
+path. The kernel journal remained empty. This is not a vertex-fetch threshold measurement and
+does not justify carrying Caicos thresholds to R700; a dedicated probe must first use a validated
+TeraScale 1 draw/readback path.
+
 ## Completed and regression-covered
 
 - Multisample correctness, closed as a group. Seven defects, each with a probe or
