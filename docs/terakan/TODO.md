@@ -287,8 +287,8 @@ that was corrected before the reported series. This is evidence for one array-la
 boundary, not combined mip/layer addressing, MSAA or general submission.
 
 The `mip-layer` and `mip-layer-negative` clear modes then selected level 1/layer 1 versus level
-0/layer 0 in the same 129x65 two-level, two-layer image. The positive mode passed and the negative
-mode observed all 8385 expected mismatches, with no kernel-journal entries; mismatch logging is
+0/layer 0 in the same 129x65 two-level, two-layer image. Five runs of each mode passed and the
+negative mode observed all 8385 expected mismatches every time, with no kernel-journal entries; mismatch logging is
 suppressed for that intentional negative control. This is a combined selector result, not a claim
 that every mip/layer layout or format is correct.
 
