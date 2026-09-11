@@ -386,18 +386,19 @@ cleanup:
 
 /* Linear BC1 is deliberately isolated from the still-unsupported tiled BC1 path.  The 8x8
  * image contains four 8-byte blocks; inverse sentinels make a skipped or partial transfer fail.
- * The negative mode copies one block row and requires the untouched second row to remain inverse.
- * This checks the block-row pitch/addressing boundary, but does not prove optimal/tiled
+ * The negative mode uses a non-zero buffer offset and requires the shifted 32-byte image to match.
+ * This checks block addressing and offset handling, but does not prove optimal/tiled
  * BC1 layout or format filtering on other R700 chips. */
 static uint32_t
 check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevice const device,
                                  VkQueue const queue, bool const negative)
 {
-   enum { block_bytes = 8, block_columns = 2, block_rows = 2, byte_count = 32 };
-   uint8_t source[byte_count], inverse[byte_count];
-   for (uint32_t i = 0; i < byte_count; ++i) {
+   enum { block_bytes = 8, block_columns = 2, block_rows = 2, image_bytes = 32, buffer_bytes = 40 };
+   uint8_t source[buffer_bytes], inverse[image_bytes];
+   for (uint32_t i = 0; i < buffer_bytes; ++i) {
       source[i] = (uint8_t)(0x31u + i * 7u);
-      inverse[i] = (uint8_t)~source[i];
+      if (i < image_bytes)
+         inverse[i] = (uint8_t)~source[i];
    }
    VkImage image = VK_NULL_HANDLE;
    VkBuffer buffer = VK_NULL_HANDLE;
@@ -455,7 +456,7 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    }
    VkBufferCreateInfo const buffer_info = {
       .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-      .size = byte_count,
+      .size = buffer_bytes,
       .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
    };
@@ -485,7 +486,7 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    if (result == VK_SUCCESS)
       result = vkMapMemory(device, buffer_memory, 0, VK_WHOLE_SIZE, 0, (void **)&buffer_mapping);
    if (result == VK_SUCCESS) {
-      memcpy(buffer_mapping, source, byte_count);
+      memcpy(buffer_mapping, source, buffer_bytes);
       VkMappedMemoryRange ranges[2] = {
          {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = image_memory, .size = VK_WHOLE_SIZE},
          {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = buffer_memory, .size = VK_WHOLE_SIZE},
@@ -517,7 +518,8 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    };
    VkBufferImageCopy const region = {
       .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
-      .imageExtent = {8, negative ? 4u : 8u, 1},
+      .bufferOffset = negative ? 8 : 0,
+      .imageExtent = {8, 8, 1},
    };
    if (result == VK_SUCCESS) {
       vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -557,21 +559,20 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
       for (uint32_t row = 0; row < block_rows; ++row)
          for (uint32_t col = 0; col < block_columns; ++col)
             for (uint32_t byte = 0; byte < block_bytes; ++byte) {
-               uint8_t const expected = negative && row == 1
-                                           ? inverse[(row * block_columns + col) * block_bytes + byte]
-                                           : source[(row * block_columns + col) * block_bytes + byte];
+               uint32_t const image_index = (row * block_columns + col) * block_bytes + byte;
+               uint8_t const expected = negative ? source[8 + image_index] : source[image_index];
                if (image_mapping[image_layout.offset + row * image_layout.rowPitch +
                                  col * block_bytes + byte] != expected)
                   ++mismatches;
             }
-      uint32_t const expected_mismatches = negative ? block_rows * block_bytes : 0;
+      uint32_t const expected_mismatches = 0;
       if (mismatches != expected_mismatches) {
          fprintf(stderr, "  RV710 linear BC1 %s observed %u mismatches, expected %u\n",
                  negative ? "negative control" : "roundtrip", mismatches, expected_mismatches);
          failures = 1;
       } else {
          fprintf(stderr, "  RV710 linear BC1 %s completed%s\n", negative ? "negative control" : "roundtrip",
-                 negative ? " with expected untouched block column" : "");
+                 negative ? " with expected buffer offset" : "");
       }
    }
    if (fence != VK_NULL_HANDLE) vkDestroyFence(device, fence, NULL);
