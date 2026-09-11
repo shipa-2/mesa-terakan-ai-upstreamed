@@ -192,6 +192,13 @@ the internal CP-DMA alignment counter. Every copied dword matched and the untouc
 destination dword retained its inverse-pattern sentinel in five consecutive runs; the kernel
 journal stayed clean. This remains a boundary check, not a substitute for image copy validation.
 
+The new `TERAKAN_DEBUG_TERASCALE_1_CP_DMA_LARGE_COPY=1` probe crosses the R600/R700 packet limit:
+it copies 2 MiB, eight bytes beyond the `2^21 - 8` maximum, so the command writer must emit a
+legal full-size packet followed by the remainder. On the RV710 run, all 524288 dwords matched and
+the inverse destination pattern provided the skipped-transfer negative control; the kernel journal
+was empty. This is one 2 MiB linear buffer split/readback on RV710, not evidence for image CP-DMA,
+fill packets, cache transitions, or general submission safety. The default submit guard remains.
+
 The opt-in CP-DMA fill probe (`TERAKAN_DEBUG_TERASCALE_1_CP_DMA_FILL=1`) is deliberately not
 counted as working on RV710: three consecutive attempts returned `VK_ERROR_UNKNOWN` (`-13`) from
 the transfer submission path, with no kernel journal entry. The existing copy/readback probes are
@@ -527,7 +534,7 @@ an unaligned `VkBuffer` offset has been obtained yet.
   actually uses happen to be bit-identical between the two headers where
   their names coincide, mixing both in one translation unit is not something
   to bet real hardware state on; the classic Gallium R600 driver keeps the
-  same split between `r600_state.c` and `evergreen_state.c`.
+same split between `r600_state.c` and `evergreen_state.c`.
   `terakan_hw_config_shared_terascale_1_test` checks the exact packet bytes
   against RV710's real reference values (`r600_state.c`) for the R700 path,
   dword for dword, plus the R600 branch's distinct values and total length,

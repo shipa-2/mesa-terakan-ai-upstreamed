@@ -234,8 +234,9 @@ cleanup:
 
 /* B3 is intentionally an opt-in RV710-only probe. The destination starts with the inverse pattern,
  * so a skipped CP DMA command cannot pass merely because mapped memory happened to contain the
- * requested data. This does not exercise unaligned copies, images, or cache transitions beyond the
- * transfer write becoming visible to the host.
+ * requested data. The large mode crosses the R600/R700 packet-size boundary and therefore also
+ * checks command splitting. This does not exercise images or cache transitions beyond the transfer
+ * write becoming visible to the host.
  */
 static uint32_t
 check_rv710_cp_dma_buffer_copy(VkPhysicalDevice const physical_device, VkDevice const device,
