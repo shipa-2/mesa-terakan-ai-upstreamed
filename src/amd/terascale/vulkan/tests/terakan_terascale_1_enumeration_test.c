@@ -115,7 +115,9 @@ terascale_1_bc1_roundtrip_mode(void)
 {
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_BC1_ROUNDTRIP");
    return value != NULL && (!strcmp(value, "1") || !strcmp(value, "negative") ||
-                            !strcmp(value, "readback") || !strcmp(value, "readback-negative"))
+                            !strcmp(value, "readback") || !strcmp(value, "readback-negative") ||
+                            !strcmp(value, "readback-mip-layer") ||
+                            !strcmp(value, "readback-mip-layer-negative"))
              ? value
              : NULL;
 }
@@ -394,7 +396,8 @@ cleanup:
  * BC1 layout or format filtering on other R700 chips. */
 static uint32_t
 check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevice const device,
-                                 VkQueue const queue, bool const negative, bool const to_buffer)
+                                 VkQueue const queue, bool const negative, bool const to_buffer,
+                                 bool const mip_layer)
 {
    enum { block_bytes = 8, block_columns = 2, block_rows = 2, image_bytes = 32, buffer_bytes = 40 };
    uint8_t source[buffer_bytes], inverse[image_bytes];
@@ -417,8 +420,8 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
       .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
       .imageType = VK_IMAGE_TYPE_2D,
       .format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK,
-      .extent = {8, 8, 1},
-      .mipLevels = 1, .arrayLayers = 1,
+      .extent = {mip_layer ? 16u : 8u, mip_layer ? 16u : 8u, 1},
+      .mipLevels = mip_layer ? 2 : 1, .arrayLayers = mip_layer ? 2 : 1,
       .samples = VK_SAMPLE_COUNT_1_BIT,
       .tiling = VK_IMAGE_TILING_LINEAR,
       .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -452,11 +455,23 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    VkImageSubresource const subresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
    VkSubresourceLayout image_layout = {0};
    if (result == VK_SUCCESS) {
-      vkGetImageSubresourceLayout(device, image, &subresource, &image_layout);
+      VkImageSubresource target_subresource = subresource;
+      target_subresource.mipLevel = mip_layer ? 1 : 0;
+      target_subresource.arrayLayer = mip_layer ? 1 : 0;
+      vkGetImageSubresourceLayout(device, image, &target_subresource, &image_layout);
+      if (mip_layer)
+         memset(image_mapping, 0xA5, image_requirements.size);
       for (uint32_t row = 0; row < block_rows; ++row)
          memcpy(image_mapping + image_layout.offset + row * image_layout.rowPitch,
                 (to_buffer ? source : inverse) + row * block_columns * block_bytes,
                 block_columns * block_bytes);
+      if (mip_layer) {
+         VkSubresourceLayout wrong_layout;
+         vkGetImageSubresourceLayout(device, image, &subresource, &wrong_layout);
+         for (uint32_t row = 0; row < block_rows; ++row)
+            memset(image_mapping + wrong_layout.offset + row * wrong_layout.rowPitch, 0x5A,
+                   block_columns * block_bytes);
+      }
    }
    VkBufferCreateInfo const buffer_info = {
       .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -523,11 +538,18 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
       .dstAccessMask = to_buffer ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT,
       .oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .image = image, .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                           .levelCount = 1, .layerCount = 1},
+      .image = image,
+      .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                           .baseMipLevel = mip_layer && !negative ? 1 : 0,
+                           .levelCount = 1,
+                           .baseArrayLayer = mip_layer && !negative ? 1 : 0,
+                           .layerCount = 1},
    };
    VkBufferImageCopy const region = {
-      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
+      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                           .mipLevel = mip_layer && !negative ? 1 : 0,
+                           .baseArrayLayer = mip_layer && !negative ? 1 : 0,
+                           .layerCount = 1},
       .bufferOffset = negative ? 8 : 0,
       .imageExtent = {8, 8, 1},
    };
@@ -1576,8 +1598,10 @@ main(void)
                bc1_mode != NULL
                   ? check_rv710_linear_bc1_roundtrip(physical_devices[device_index], device, queue,
                                                      !strcmp(bc1_mode, "negative") ||
-                                                        !strcmp(bc1_mode, "readback-negative"),
-                                                     !strncmp(bc1_mode, "readback", 8))
+                                                        !strcmp(bc1_mode, "readback-negative") ||
+                                                        !strcmp(bc1_mode, "readback-mip-layer-negative"),
+                                                     !strncmp(bc1_mode, "readback", 8),
+                                                     strstr(bc1_mode, "mip-layer") != NULL)
                : terascale_1_linear_image_readback_opted_in() ||
                      terascale_1_linear_image_clear_opted_in() ||
                      terascale_1_linear_buffer_upload_opted_in() ||
