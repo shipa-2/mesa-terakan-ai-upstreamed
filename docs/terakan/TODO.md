@@ -303,6 +303,15 @@ guard is unchanged. After rebuilding this guard on RV710, the same opt-in probe 
 `VK_ERROR_UNKNOWN` during command recording and produced no new `CP DMA`, `Invalid command
 stream`, ring or GPU-reset journal entry; this verifies the safety boundary, not the operation.
 
+A one-shot diagnostic then tried to replace the rejected immediate-data fill with repeated copies
+from host-written 64 KiB push-buffer BOs (`TERAKAN_DEBUG_TERASCALE_1_MSAA_METADATA_COPY=1`). The
+source patterns were the classic R700 4x FMASK identity (`0xE4E4E4E4`) and CMASK (`0xCCCCCCCC`),
+but those constants have not been read back on RV710. The command reached `vkQueueSubmit`, after
+which the RV710 ring stalled until the 30-second timeout; the kernel reported a GPU lockup. This
+is a negative result for the proposed CP-DMA-copy initialization, not evidence about FMASK values
+or layout. The diagnostic was removed and the command-recording rejection remains unconditional:
+MSAA color metadata initialization, clear and resolve are still unsupported on TeraScale 1.
+
 The next image-to-buffer attempt established a separate safety boundary. Its generation-neutral
 NIR shader still writes the destination with `MEM_RAT`, but the R600/R700 CB converter deliberately
 rejects Evergreen-shaped buffer UAV descriptors. Letting the draw continue with that UAV unbound
