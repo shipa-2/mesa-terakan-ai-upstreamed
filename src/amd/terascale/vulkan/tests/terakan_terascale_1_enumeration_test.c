@@ -619,7 +619,7 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
                      ++mismatches;
                }
       }
-      uint32_t const expected_mismatches = 0;
+      uint32_t const expected_mismatches = negative && mip_layer ? image_bytes : 0;
       if (mismatches != expected_mismatches) {
          fprintf(stderr, "  RV710 linear BC1 %s observed %u mismatches, expected %u\n",
                  to_buffer ? (negative ? "readback negative control" : "readback")
