@@ -490,7 +490,12 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    if (result == VK_SUCCESS)
       result = vkMapMemory(device, buffer_memory, 0, VK_WHOLE_SIZE, 0, (void **)&buffer_mapping);
    if (result == VK_SUCCESS) {
-      memcpy(buffer_mapping, to_buffer ? inverse : source, buffer_bytes);
+      if (to_buffer) {
+         for (uint32_t i = 0; i < buffer_bytes; ++i)
+            buffer_mapping[i] = inverse[i % image_bytes];
+      } else {
+         memcpy(buffer_mapping, source, buffer_bytes);
+      }
       VkMappedMemoryRange ranges[2] = {
          {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = image_memory, .size = VK_WHOLE_SIZE},
          {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = buffer_memory, .size = VK_WHOLE_SIZE},
