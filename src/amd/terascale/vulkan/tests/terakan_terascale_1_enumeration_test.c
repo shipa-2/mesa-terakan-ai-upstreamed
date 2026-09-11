@@ -386,8 +386,8 @@ cleanup:
 
 /* Linear BC1 is deliberately isolated from the still-unsupported tiled BC1 path.  The 8x8
  * image contains four 8-byte blocks; inverse sentinels make a skipped or partial transfer fail.
- * The negative mode copies one block column and requires the untouched second column to remain
- * inverse.  This checks the block-row pitch/addressing boundary, but does not prove optimal/tiled
+ * The negative mode copies one block row and requires the untouched second row to remain inverse.
+ * This checks the block-row pitch/addressing boundary, but does not prove optimal/tiled
  * BC1 layout or format filtering on other R700 chips. */
 static uint32_t
 check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevice const device,
@@ -517,7 +517,7 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
    };
    VkBufferImageCopy const region = {
       .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
-      .imageExtent = {negative ? 4u : 8u, 8, 1},
+      .imageExtent = {8, negative ? 4u : 8u, 1},
    };
    if (result == VK_SUCCESS) {
       vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -557,7 +557,7 @@ check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevic
       for (uint32_t row = 0; row < block_rows; ++row)
          for (uint32_t col = 0; col < block_columns; ++col)
             for (uint32_t byte = 0; byte < block_bytes; ++byte) {
-               uint8_t const expected = negative && col == 1
+               uint8_t const expected = negative && row == 1
                                            ? inverse[(row * block_columns + col) * block_bytes + byte]
                                            : source[(row * block_columns + col) * block_bytes + byte];
                if (image_mapping[image_layout.offset + row * image_layout.rowPitch +
