@@ -1040,13 +1040,18 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
          if (layer_copy || layer_negative) {
             VkClearColorValue const other_layer_colour = {.float32 = {1.0f, 0.0f, 1.0f, 1.0f}};
             VkImageSubresourceRange const other_layer_range = {
-               .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseArrayLayer = 0, .layerCount = 1};
+               .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+               .levelCount = 1,
+               .baseArrayLayer = 0,
+               .layerCount = 1,
+            };
             vkCmdClearColorImage(command_buffer, tiled_image, VK_IMAGE_LAYOUT_GENERAL,
                                  &other_layer_colour, 1, &other_layer_range);
          }
          if (operation == RV710_TILED_IMAGE_CLEAR) {
             VkImageSubresourceRange const target_clear_range = {
                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+               .levelCount = 1,
                .baseArrayLayer = clear_layer ? 1 : 0,
                .layerCount = 1,
             };
