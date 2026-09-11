@@ -164,18 +164,38 @@ terakan_query_sync_before_pool_write(struct terakan_gfx_command_writer * const c
                                         TERAKAN_BARRIER_ACTION_PARTIAL_FLUSH_CP_THROUGH_VS);
 }
 
+/* The command-side query path still emits R8xx/Evergreen-shaped EVENT/CP-DMA and meta-UAV
+ * operations. R700 DB query state now has a CPU encoder, but those surrounding operations have
+ * not passed an RV710 command-stream/readback test. Fail during recording instead of allowing the
+ * opt-in TeraScale 1 submit diagnostic to send an unvalidated query stream. Host-side query-pool
+ * reset/results remain available because they do not touch the GPU. */
+static bool
+terakan_query_reject_terascale_1(struct terakan_command_buffer * const command_buffer)
+{
+   if (!terakan_gfx_command_writer_physical_device(command_buffer->command_writer.gfx)
+           ->chip_info.is_terascale_1) {
+      return false;
+   }
+   vk_command_buffer_set_error(&command_buffer->vk, VK_ERROR_FEATURE_NOT_PRESENT);
+   return true;
+}
+
 VKAPI_ATTR void VKAPI_CALL
 terakan_CmdResetQueryPool(VkCommandBuffer const commandBuffer, VkQueryPool const queryPool,
                           uint32_t firstQuery, uint32_t queryCount)
 {
+   struct terakan_command_buffer * const command_buffer =
+      terakan_command_buffer_from_handle(commandBuffer);
+   if (terakan_query_reject_terascale_1(command_buffer)) {
+      return;
+   }
    struct terakan_query_pool const * const query_pool = terakan_query_pool_from_handle(queryPool);
    terakan_query_pool_clamp_range(query_pool, &firstQuery, &queryCount);
    if (unlikely(queryCount == 0)) {
       /* If no writes will be emitted, there's nothing to sync to after this reset. */
       return;
    }
-   struct terakan_gfx_command_writer * const command_writer =
-      terakan_command_buffer_from_handle(commandBuffer)->command_writer.gfx;
+   struct terakan_gfx_command_writer * const command_writer = command_buffer->command_writer.gfx;
    terakan_query_sync_before_pool_write(command_writer);
    /* Mark as unavailable. */
    terakan_cp_dma_fill(
@@ -213,6 +233,11 @@ terakan_CmdBeginQueryIndexedEXT(VkCommandBuffer const commandBuffer, VkQueryPool
                                 uint32_t const query, VkQueryControlFlags const flags,
                                 uint32_t const index)
 {
+   struct terakan_command_buffer * const command_buffer =
+      terakan_command_buffer_from_handle(commandBuffer);
+   if (terakan_query_reject_terascale_1(command_buffer)) {
+      return;
+   }
    struct terakan_query_pool const * const query_pool = terakan_query_pool_from_handle(queryPool);
 
    /* #MemoryIntegrity */
@@ -220,8 +245,7 @@ terakan_CmdBeginQueryIndexedEXT(VkCommandBuffer const commandBuffer, VkQueryPool
       return;
    }
 
-   struct terakan_gfx_command_writer * const command_writer =
-      terakan_command_buffer_from_handle(commandBuffer)->command_writer.gfx;
+   struct terakan_gfx_command_writer * const command_writer = command_buffer->command_writer.gfx;
 
    terakan_query_sync_before_pool_write(command_writer);
 
@@ -374,6 +398,11 @@ VKAPI_ATTR void VKAPI_CALL
 terakan_CmdEndQueryIndexedEXT(VkCommandBuffer const commandBuffer, VkQueryPool const queryPool,
                               uint32_t const query, uint32_t const index)
 {
+   struct terakan_command_buffer * const command_buffer =
+      terakan_command_buffer_from_handle(commandBuffer);
+   if (terakan_query_reject_terascale_1(command_buffer)) {
+      return;
+   }
    struct terakan_query_pool const * const query_pool = terakan_query_pool_from_handle(queryPool);
 
    /* #MemoryIntegrity */
@@ -381,8 +410,7 @@ terakan_CmdEndQueryIndexedEXT(VkCommandBuffer const commandBuffer, VkQueryPool c
       return;
    }
 
-   struct terakan_gfx_command_writer * const command_writer =
-      terakan_command_buffer_from_handle(commandBuffer)->command_writer.gfx;
+   struct terakan_gfx_command_writer * const command_writer = command_buffer->command_writer.gfx;
 
    terakan_query_sync_before_pool_write(command_writer);
 
@@ -651,6 +679,11 @@ terakan_CmdWriteTimestamp2(VkCommandBuffer const commandBuffer,
                            UNUSED VkPipelineStageFlags2 const stage, VkQueryPool const queryPool,
                            uint32_t const query)
 {
+   struct terakan_command_buffer * const command_buffer =
+      terakan_command_buffer_from_handle(commandBuffer);
+   if (terakan_query_reject_terascale_1(command_buffer)) {
+      return;
+   }
    struct terakan_query_pool const * const query_pool = terakan_query_pool_from_handle(queryPool);
 
    /* #MemoryIntegrity
@@ -661,8 +694,7 @@ terakan_CmdWriteTimestamp2(VkCommandBuffer const commandBuffer,
       return;
    }
 
-   struct terakan_gfx_command_writer * const command_writer =
-      terakan_command_buffer_from_handle(commandBuffer)->command_writer.gfx;
+   struct terakan_gfx_command_writer * const command_writer = command_buffer->command_writer.gfx;
 
    terakan_query_sync_before_pool_write(command_writer);
 

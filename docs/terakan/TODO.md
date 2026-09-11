@@ -1124,6 +1124,15 @@ same split between `r600_state.c` and `evergreen_state.c`.
   stream or result readback has been submitted on RV710, and the normal
   TeraScale 1 submit guard remains.
 
+  Command-side query recording is additionally rejected on TeraScale 1 at
+  `vkCmdResetQueryPool`, `vkCmdBeginQuery`, `vkCmdEndQuery`,
+  `vkCmdWriteTimestamp2` and `vkCmdCopyQueryPoolResults`.  The surrounding
+  EVENT_WRITE/CP-DMA and query-copy UAV path is still Evergreen-shaped, so
+  allowing the opt-in submit switch to reach it would turn an unproven packet
+  into a GPU lockup risk.  This is a safety boundary, not query support:
+  host-side pool reset/results remain available, while command-side query
+  readback still needs a R700-specific implementation and RV710 validation.
+
 - TeraScale 1 (R600/R700) surface pitch/height/base-alignment math:
   `terakan_image_tiling_terascale_1_alignments_linear_aligned()`/
   `_1d_tiled_thin1()`/`_2d_tiled_thin1()` (`terakan_image_tiling_terascale_1.c`),

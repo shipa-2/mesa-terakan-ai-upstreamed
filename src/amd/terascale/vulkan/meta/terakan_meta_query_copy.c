@@ -1985,6 +1985,14 @@ terakan_CmdCopyQueryPoolResults(VkCommandBuffer const commandBuffer, VkQueryPool
    struct terakan_physical_device const * const physical_device =
       terakan_gfx_command_writer_physical_device(command_writer);
 
+   /* The destination is an Evergreen-shaped UAV and the query-copy meta shaders have not been
+    * validated on R600/R700. Keep the command-side query API behind the same explicit safety
+    * boundary as the rest of TeraScale 1 submission; host-side query results remain supported. */
+   if (physical_device->chip_info.is_terascale_1) {
+      vk_command_buffer_set_error(&command_buffer->vk, VK_ERROR_FEATURE_NOT_PRESENT);
+      return;
+   }
+
    struct terakan_query_pool const * const query_pool = terakan_query_pool_from_handle(queryPool);
 
    bool const is_64_bit = (flags & VK_QUERY_RESULT_64_BIT) != 0;
