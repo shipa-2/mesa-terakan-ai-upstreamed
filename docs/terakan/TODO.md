@@ -359,6 +359,11 @@ observing the shifted 32-byte image, so ignoring the offset or skipping the tran
 Both modes pass in the final paired remote run with no new kernel journal entries. This proves
 only linear BC1 block addressing/offset handling on RV710; tiled BC1, mip/layer BC1, and format
 filtering on other R700 chips remain unverified and tiled BC1 remains explicitly rejected.
+The inverse direction is now covered too: `TERAKAN_DEBUG_TERASCALE_1_BC1_ROUNDTRIP=readback`
+copies the four blocks from a linear image into a 40-byte inverse buffer, and
+`readback-negative` repeats it at `bufferOffset = 8`. Both modes passed on RV710 in the final
+paired run with no kernel messages. This adds image-to-buffer evidence only for linear level zero,
+single layer; it does not validate tiled, mip/layer BC1 or other R700 devices.
 The existing CPU tiling test also fixes this exact fixture: 384x144 base, 256x128 padded mip,
 0x36000 mip offset and 0x56000 total bytes. Adding 256 bytes to the production mip-offset output
 failed its new assertion; restoring the calculation passed. The mutation was CPU-only and was
