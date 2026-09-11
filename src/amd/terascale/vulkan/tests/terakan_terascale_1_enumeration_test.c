@@ -1942,6 +1942,11 @@ check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice co
                            VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &to_host);
    if (result == VK_SUCCESS)
       result = vkEndCommandBuffer(command_buffer);
+   if (result != VK_SUCCESS) {
+      fprintf(stderr, "  RV710 application-draw command recording failed with %d\n", result);
+      failures = 1;
+      goto cleanup;
+   }
    VkFenceCreateInfo const fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
    if (result == VK_SUCCESS)
       result = vkCreateFence(device, &fence_info, NULL, &fence);
