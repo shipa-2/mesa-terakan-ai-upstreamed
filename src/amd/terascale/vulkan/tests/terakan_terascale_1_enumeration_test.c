@@ -123,7 +123,8 @@ terascale_1_tiled_image_clear_opted_in(void)
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_TILED_IMAGE_CLEAR");
    return value != NULL && (!strcmp(value, "1") || !strcmp(value, "macro") ||
                             !strcmp(value, "edge") || !strcmp(value, "layer") ||
-                            !strcmp(value, "layer-negative"));
+                            !strcmp(value, "layer-negative") || !strcmp(value, "mip-layer") ||
+                            !strcmp(value, "mip-layer-negative"));
 }
 
 static char const *
@@ -697,12 +698,19 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                                !strcmp(macro_variant, "mip-layer");
    bool const mip_layer_negative = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                                    !strcmp(macro_variant, "mip-layer-negative");
-   bool const mip_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
-                         (!strcmp(macro_variant, "mip") || mip_layer_copy || mip_layer_negative);
+   bool const clear_mip_layer = operation == RV710_TILED_IMAGE_CLEAR && tiled_clear_variant &&
+                                (!strcmp(tiled_clear_variant, "mip-layer") ||
+                                 !strcmp(tiled_clear_variant, "mip-layer-negative"));
+   bool const clear_mip_layer_negative =
+      clear_mip_layer && !strcmp(tiled_clear_variant, "mip-layer-negative");
+   bool const mip_copy = (operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
+                          (!strcmp(macro_variant, "mip") || mip_layer_copy || mip_layer_negative)) ||
+                         clear_mip_layer;
    bool const clear_layer = operation == RV710_TILED_IMAGE_CLEAR && tiled_clear_variant &&
                             (!strcmp(tiled_clear_variant, "layer") ||
-                             !strcmp(tiled_clear_variant, "layer-negative"));
-   bool const clear_layer_negative = clear_layer && !strcmp(tiled_clear_variant, "layer-negative");
+                             !strcmp(tiled_clear_variant, "layer-negative") || clear_mip_layer);
+   bool const clear_layer_negative =
+      clear_layer && (!strcmp(tiled_clear_variant, "layer-negative") || clear_mip_layer_negative);
    bool const layer_copy = (operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                             (!strcmp(macro_variant, "layer") || mip_layer_copy || mip_layer_negative)) ||
                            clear_layer;
@@ -1051,6 +1059,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
          if (operation == RV710_TILED_IMAGE_CLEAR) {
             VkImageSubresourceRange const target_clear_range = {
                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+               .baseMipLevel = clear_mip_layer ? 1 : 0,
                .levelCount = 1,
                .baseArrayLayer = clear_layer ? 1 : 0,
                .layerCount = 1,
@@ -1092,7 +1101,9 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                               VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, barriers);
          VkImageCopy const image_region = {
             .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                               .mipLevel = mip_layer_negative ? 0 : mip_copy ? 1 : 0,
+                               .mipLevel = mip_layer_negative || clear_mip_layer_negative
+                                              ? 0
+                                              : mip_copy ? 1 : 0,
                                .baseArrayLayer = mip_layer_negative || clear_layer_negative
                                                     ? 0
                                                     : layer_copy ? 1 : 0,
@@ -1182,7 +1193,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
          /* Negative hardware control: layer 0 was deliberately magenta, while the oracle expects
           * layer 1's distinct pattern. A full mismatch proves baseArrayLayer is observable. */
          fprintf(stderr, "  RV710 %s-negative control observed %u expected mismatches\n",
-                 mip_layer_negative ? "mip-layer" : "layer", mismatch_count);
+                 mip_layer_negative || clear_mip_layer_negative ? "mip-layer" : "layer",
+                 mismatch_count);
          failures = 0;
       }
       if (!failures)
