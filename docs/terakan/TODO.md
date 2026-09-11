@@ -351,9 +351,14 @@ level 0/layer 0 while retaining the level-1/layer-1 oracle; it observed all 8385
 mismatches and PASS. This is a combined selector check only, not full mip-chain or array support.
 The TeraScale 1 linear buffer-image path also operates on compressed blocks: BC1 regions are
 translated to 4x4 block coordinates, use `bytes_per_block == 8`, and CP-DMA row/slice pitches are
-checked in blocks before emission. This source-path evidence is not a GPU BC1 readback; a bounded
-compressed-format oracle is still required, and tiled BC1 remains explicitly rejected until its
-block-addressing path is measured.
+checked in blocks before emission. The opt-in `TERAKAN_DEBUG_TERASCALE_1_BC1_ROUNDTRIP=1` oracle
+now passes on RV710: an 8x8 linear BC1 image (four 8-byte blocks) is initialized with inverse
+sentinels, uploaded through the TeraScale 1 CP-DMA path, and all 32 bytes read back correctly.
+The `negative` mode uses a 40-byte source buffer with `bufferOffset = 8`; it also passes by
+observing the shifted 32-byte image, so ignoring the offset or skipping the transfer is detected.
+Both modes pass on three consecutive remote runs with no new kernel journal entries. This proves
+only linear BC1 block addressing/offset handling on RV710; tiled BC1, mip/layer BC1, and format
+filtering on other R700 chips remain unverified and tiled BC1 remains explicitly rejected.
 The existing CPU tiling test also fixes this exact fixture: 384x144 base, 256x128 padded mip,
 0x36000 mip offset and 0x56000 total bytes. Adding 256 bytes to the production mip-offset output
 failed its new assertion; restoring the calculation passed. The mutation was CPU-only and was
