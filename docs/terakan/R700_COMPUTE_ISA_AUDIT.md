@@ -128,7 +128,25 @@ Negative control: temporarily changing the R700 opcode table entry to Evergreen
 0x55 produced `c382a123 aa80f000` and exit status 1; restoring 0x3a passed.
 The opcode table has no retained edits. This verifies instruction packing only:
 the fixture has no initialized GPRs, aperture or launch and must never be
-submitted. It does not prove a NIR SSBO store lowers to this instruction.
-SFN's existing MemRingOutInstr is not an interchangeable wrapper: it restricts
-opcodes to ring exports and emits indexed ARRAY_SIZE=0xfff, whereas the R700
-MEM_EXPORT description explicitly requires that instruction field to be zero.
+submitted.
+
+## SFN scalar-store path
+
+For `ISA_CC_R700`, `RatInstr::emit_ssbo_store` now emits an indexed
+`MemRingOutInstr` with `cf_mem_export`, rather than a RAT store. The class and
+assembler were extended narrowly for that opcode: scalar stores use element
+size zero, component mask one, and ARRAY_SIZE zero; historic ring exports
+retain their four-component / `0xfff` path. Each NIR component remains a
+separate one-DWORD export at `byte_offset / 4 + component`.
+
+`terakan_sfn_lowering_test` drives that SFN instruction through the real
+assembler and checks `0382a123 9d201000`: indexed scalar R5/R7, base 0x123,
+component mask one and final EOP. Negative control: temporarily restoring the
+ring ARRAY_SIZE `0xfff` made this exact assertion fail; the zero setting was
+restored. This is an encoder/lowering-path test, not a shader execution test.
+
+The lowering rejects a non-zero or dynamic resource selection, or an image
+slot offset, on R700 rather than aliasing it to the one SX aperture. It does not configure
+SX_MEMORY_EXPORT_BASE/SIZE, establish the aperture's size encoding, lower SSBO
+loads/atomics/images, provide ES launch state, or make application dispatch
+safe. Therefore it is intentionally not grounds for relaxing submit.

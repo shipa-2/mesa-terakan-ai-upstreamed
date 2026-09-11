@@ -658,14 +658,18 @@ AssamblerVisitor::visit(const MemRingOutInstr& instr)
 
    output.gpr = instr.value().sel();
    output.type = instr.type();
-   output.elem_size = 3;
-   output.comp_mask = 0xf;
+   bool const is_mem_export = instr.op() == cf_mem_export;
+   /* R700 MEM_EXPORT is not a ring write: ARRAY_SIZE is unused and must be
+    * zero (ISA 9-25), while its element count and component mask describe the
+    * actual store. Keep the historic four-component ring payload unchanged. */
+   output.elem_size = is_mem_export ? instr.ncomp() : 3;
+   output.comp_mask = is_mem_export ? BITFIELD_MASK(instr.ncomp() + 1) : 0xf;
    output.burst_count = 1;
    output.op = instr.op();
    if (instr.type() == MemRingOutInstr::mem_write_ind ||
        instr.type() == MemRingOutInstr::mem_write_ind_ack) {
       output.index_gpr = instr.index_reg();
-      output.array_size = 0xfff;
+      output.array_size = is_mem_export ? 0 : 0xfff;
    }
    output.array_base = instr.array_base();
 

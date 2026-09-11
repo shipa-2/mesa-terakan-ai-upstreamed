@@ -682,6 +682,11 @@ oracle; indirect indexed draws and all indexed hardware execution remain unverif
   relationship between the aperture and BO bounds has yet been established. Pinned
   zen v7.2.3-zen1 source relocates the base but does not validate the separately
   accepted aperture against that BO; kernel acceptance is not a bounds oracle.
+  SFN now encodes a scalar `store_ssbo` as R700 `MEM_EXPORT` only for the one
+  static resource that could own that aperture, with a CPU oracle for the exact
+  final CF pair and a wrong-ARRAY_SIZE negative control. This is not submission
+  support: base/size emission, safe BO bounds, ES launch, loads, atomics and
+  dynamic bindings remain deliberately unavailable.
 
 - TeraScale 1 (R700) `DB_SHADER_CONTROL`: the runtime emitter no longer sends
   the full Evergreen payload merely because both generations place the

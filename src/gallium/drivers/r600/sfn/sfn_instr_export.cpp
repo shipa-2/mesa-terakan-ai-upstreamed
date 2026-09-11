@@ -395,7 +395,8 @@ MemRingOutInstr::MemRingOutInstr(ECFOpCode ring,
     m_export_index(index)
 {
    assert(m_ring_op == cf_mem_ring || m_ring_op == cf_mem_ring1 ||
-          m_ring_op == cf_mem_ring2 || m_ring_op == cf_mem_ring3);
+          m_ring_op == cf_mem_ring2 || m_ring_op == cf_mem_ring3 ||
+          m_ring_op == cf_mem_export);
    assert(m_num_comp <= 4);
 
    if (m_export_index)
@@ -438,7 +439,10 @@ void
 MemRingOutInstr::do_print(std::ostream& os) const
 {
 
-   os << "MEM_RING " << (m_ring_op == cf_mem_ring ? 0 : m_ring_op - cf_mem_ring1 + 1);
+   if (m_ring_op == cf_mem_export)
+      os << "MEM_EXPORT";
+   else
+      os << "MEM_RING " << (m_ring_op == cf_mem_ring ? 0 : m_ring_op - cf_mem_ring1 + 1);
    os << " " << write_type_str[m_type] << " " << m_base_address;
    os << " " << value();
    if (m_type == mem_write_ind || m_type == mem_write_ind_ack)

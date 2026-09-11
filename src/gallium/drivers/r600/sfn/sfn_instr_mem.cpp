@@ -13,6 +13,7 @@
 #include "nir_intrinsics_indices.h"
 #include "sfn_alu_defines.h"
 #include "sfn_instr_alu.h"
+#include "sfn_instr_export.h"
 #include "sfn_instr_fetch.h"
 #include "sfn_instr_tex.h"
 #include "sfn_shader.h"
@@ -818,6 +819,15 @@ RatInstr::emit_ssbo_store(nir_intrinsic_instr *instr, Shader& shader)
 
    auto [offset, rat_id] = shader.evaluate_resource_offset(instr, 1);
 
+   /* R700 has no RAT storage path. The documented alternative is one
+    * SX_MEMORY_EXPORT aperture. Do not silently reinterpret a dynamic or
+    * non-zero descriptor selection as that aperture: configuring which BO
+    * owns it is a driver-side operation and is not implemented yet. */
+   bool const r700_mem_export = shader.chip_class() == ISA_CC_R700;
+   if (r700_mem_export &&
+       (offset != 0 || rat_id != nullptr || shader.ssbo_image_offset() != 0))
+      return false;
+
    shader.emit_instruction(
       new AluInstr(op2_lshr_int, addr_base, orig_addr, vf.literal(2), AluInstr::write));
 
@@ -834,16 +844,29 @@ RatInstr::emit_ssbo_store(nir_intrinsic_instr *instr, Shader& shader)
       PRegister v = vf.temp_register(0);
       shader.emit_instruction(new AluInstr(op1_mov, v, value, AluInstr::last_write));
       auto value_vec = RegisterVec4(v, nullptr, nullptr, nullptr, pin_chan);
-      auto store = new RatInstr(cf_mem_rat,
-                                RatInstr::STORE_TYPED,
-                                value_vec,
-                                addr_vec,
-                                offset + shader.ssbo_image_offset(),
-                                rat_id,
-                                1,
-                                1,
-                                0);
-      shader.emit_instruction(store);
+      if (r700_mem_export) {
+         /* The index is in DWORDs. The individual-component loop gives each
+          * scalar a distinct address and avoids claiming unproven vector
+          * layout semantics. The enclosing driver must still program the
+          * sole SX aperture before this bytecode is executable. */
+         shader.emit_instruction(new MemRingOutInstr(cf_mem_export,
+                                                     MemRingOutInstr::mem_write_ind,
+                                                     value_vec,
+                                                     0,
+                                                     1,
+                                                     addr_vec[0]));
+      } else {
+         auto store = new RatInstr(cf_mem_rat,
+                                   RatInstr::STORE_TYPED,
+                                   value_vec,
+                                   addr_vec,
+                                   offset + shader.ssbo_image_offset(),
+                                   rat_id,
+                                   1,
+                                   1,
+                                   0);
+         shader.emit_instruction(store);
+      }
    }
 
    return true;

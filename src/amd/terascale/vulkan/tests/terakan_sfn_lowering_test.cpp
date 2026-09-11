@@ -5,8 +5,10 @@
 
 #include "compiler/glsl_types.h"
 #include "gallium/drivers/r600/sfn/sfn_instr_alu.h"
+#include "gallium/drivers/r600/sfn/sfn_instr_export.h"
 #include "gallium/drivers/r600/sfn/sfn_instr_fetch.h"
 #include "gallium/drivers/r600/sfn/sfn_instr_mem.h"
+#include "gallium/drivers/r600/sfn/sfn_assembler.h"
 #include "gallium/drivers/r600/sfn/sfn_memorypool.h"
 #include "gallium/drivers/r600/sfn/sfn_nir.h"
 #include "gallium/drivers/r600/sfn/sfn_nir_lower_alu.h"
@@ -120,6 +122,47 @@ test_rat_dead_required_instruction_readiness()
    CHECK(dead_dependency.set_dead());
    CHECK(rat.ready());
 
+   release_pool();
+}
+
+static void
+test_r700_mem_export_assembler_lowering()
+{
+   using namespace r600;
+
+   /* Exercise the SFN instruction path rather than just r600_bytecode_output.
+    * A real R700 compute dispatch still needs ES state and SX aperture setup;
+    * this test deliberately stops at bytecode construction. */
+   init_pool();
+   r600_shader_key key = {};
+   FragmentShaderR600 shader(key);
+   shader.set_chip_class(ISA_CC_R700);
+   shader.set_chip_family(CHIP_RV710);
+   shader.emit_instruction(new MemRingOutInstr(cf_mem_export,
+                                                MemRingOutInstr::mem_write_ind,
+                                                RegisterVec4(5, false),
+                                                0x123,
+                                                1,
+                                                new Register(7, 0, pin_none)));
+
+   r600_shader compiled = {};
+   compiled.processor_type = PIPE_SHADER_COMPUTE;
+   r600_bytecode_init(&compiled.bc, R700, CHIP_RV710, false);
+   auto *isa = static_cast<r600_isa *>(calloc(1, sizeof(r600_isa)));
+   CHECK(isa != nullptr);
+   CHECK(!r600_isa_init(R700, isa));
+   compiled.bc.isa = isa;
+   Assembler assembler(&compiled, key);
+   CHECK(assembler.lower(&shader));
+   CHECK(!r600_bytecode_build(&compiled.bc));
+   CHECK(compiled.bc.ndw == 2);
+   /* The assembler closes the sole CF instruction: EOP is set here. The
+    * lower-level encoding fixture deliberately checks a non-final CF pair. */
+   CHECK(compiled.bc.bytecode[0] == 0x0382a123);
+   CHECK(compiled.bc.bytecode[1] == 0x9d201000);
+
+   r600_bytecode_clear(&compiled.bc);
+   r600_isa_destroy(isa);
    release_pool();
 }
 
@@ -481,6 +524,7 @@ main()
    test_dead_required_instruction_readiness();
    test_fetch_dead_required_instruction_readiness();
    test_rat_dead_required_instruction_readiness();
+   test_r700_mem_export_assembler_lowering();
    test_address_load_ignores_future_register_write();
    test_address_load_ignores_loop_carried_future_parent();
    test_shared_store_lowering();
