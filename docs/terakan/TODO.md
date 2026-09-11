@@ -337,6 +337,14 @@ restored probe passed 10/10. Reading source mip 0 instead, without changing the 
 on a same-level upload/readback that could alias both to level 0. Kernel journal stayed clean.
 This covers one nonzero mip and one RGBA8 extent, not the full mip chain, small-mip degradation,
 other formats, array layers or CPU per-pixel tiled address equations.
+
+The `layer` variant similarly uses a two-layer 129x65 optimal source. It clears layer 0 magenta,
+uploads the distinct per-pixel pattern only to layer 1, and copies layer 1 to a linear destination.
+The current RV710 source build passed 3/3 with a clean kernel journal. Its `layer-negative`
+hardware control changes only the image-copy source layer to 0 while retaining the layer-1 oracle:
+it observed exactly 8385 mismatches (all pixels) and then reports PASS. This makes layer selection
+observable and covers one array-layer/bank-rotation boundary; it does not establish combined mip
+and layer addressing, other formats, 3D slices, CPU tiled-address equations, or general submission.
 The existing CPU tiling test also fixes this exact fixture: 384x144 base, 256x128 padded mip,
 0x36000 mip offset and 0x56000 total bytes. Adding 256 bytes to the production mip-offset output
 failed its new assertion; restoring the calculation passed. The mutation was CPU-only and was
