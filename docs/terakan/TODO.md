@@ -1132,6 +1132,11 @@ same split between `r600_state.c` and `evergreen_state.c`.
   into a GPU lockup risk.  This is a safety boundary, not query support:
   host-side pool reset/results remain available, while command-side query
   readback still needs a R700-specific implementation and RV710 validation.
+  After rebuilding this guard on RV710, the existing eight-generation query
+  synchronization test selected `AMD TeraScale 1 RV710 (Terakan)` and ended
+  command recording with `VK_ERROR_FEATURE_NOT_PRESENT` (`-8`) before queue
+  submission.  This is the intended negative control for the unsafe path, not
+  evidence that query execution works.
 
 - TeraScale 1 (R600/R700) surface pitch/height/base-alignment math:
   `terakan_image_tiling_terascale_1_alignments_linear_aligned()`/
