@@ -83,6 +83,13 @@ terascale_1_cp_dma_unaligned_copy_opted_in(void)
 }
 
 static bool
+terascale_1_cp_dma_large_copy_opted_in(void)
+{
+   char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_CP_DMA_LARGE_COPY");
+   return value != NULL && strcmp(value, "1") == 0;
+}
+
+static bool
 terascale_1_linear_image_readback_opted_in(void)
 {
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_LINEAR_IMAGE_READBACK");
@@ -232,9 +239,11 @@ cleanup:
  */
 static uint32_t
 check_rv710_cp_dma_buffer_copy(VkPhysicalDevice const physical_device, VkDevice const device,
-                               VkQueue const queue, bool const fill, bool const unaligned)
+                               VkQueue const queue, bool const fill, bool const unaligned,
+                               bool const large)
 {
-   enum { dword_count = 16, byte_count = dword_count * sizeof(uint32_t) };
+   uint32_t const dword_count = large ? UINT32_C(524288) : UINT32_C(16);
+   VkDeviceSize const byte_count = (VkDeviceSize)dword_count * sizeof(uint32_t);
    VkBuffer buffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
    VkDeviceMemory memories[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
    uint32_t * mappings[2] = {NULL, NULL};
@@ -372,8 +381,9 @@ check_rv710_cp_dma_buffer_copy(VkPhysicalDevice const physical_device, VkDevice 
       }
    }
    if (!failures)
-      fprintf(stderr, "  RV710 CP-DMA %s buffer %s/readback completed\n",
-              unaligned ? "unaligned" : "64-byte", fill ? "fill" : "copy");
+      fprintf(stderr, "  RV710 CP-DMA %s%s buffer %s/readback completed\n",
+              large ? "2MiB-split " : "", unaligned ? "unaligned" : "64-byte",
+              fill ? "fill" : "copy");
 
 cleanup:
    vkDestroyFence(device, fence, NULL);
@@ -1618,15 +1628,18 @@ main(void)
                           ? RV710_TILED_IMAGE_ROUNDTRIP
                        : terascale_1_linear_buffer_upload_opted_in() ? RV710_LINEAR_BUFFER_UPLOAD
                                                                      : RV710_LINEAR_IMAGE_READBACK)
+               : terascale_1_cp_dma_large_copy_opted_in()
+                  ? check_rv710_cp_dma_buffer_copy(physical_devices[device_index], device, queue,
+                                                   false, false, true)
                : terascale_1_cp_dma_unaligned_copy_opted_in()
                   ? check_rv710_cp_dma_buffer_copy(physical_devices[device_index], device, queue,
-                                                   false, true)
+                                                   false, true, false)
                : terascale_1_cp_dma_fill_opted_in()
                   ? check_rv710_cp_dma_buffer_copy(physical_devices[device_index], device, queue,
-                                                   true, false)
+                                                   true, false, false)
                : terascale_1_cp_dma_copy_opted_in()
                   ? check_rv710_cp_dma_buffer_copy(physical_devices[device_index], device, queue,
-                                                   false, false)
+                                                   false, false, false)
                : terascale_1_signal_only_opted_in() ? check_rv710_signal_only_submit(device, queue)
                                                     : check_rv710_empty_submit(device, queue);
          } else {
