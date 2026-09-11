@@ -848,8 +848,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
       if ((layer_negative || mip_layer_negative) && mismatch_count == width * height) {
          /* Negative hardware control: layer 0 was deliberately magenta, while the oracle expects
           * layer 1's distinct pattern. A full mismatch proves baseArrayLayer is observable. */
-         fprintf(stderr, "  RV710 layer-negative control observed %u expected mismatches\n",
-                 mismatch_count);
+         fprintf(stderr, "  RV710 %s-negative control observed %u expected mismatches\n",
+                 mip_layer_negative ? "mip-layer" : "layer", mismatch_count);
          failures = 0;
       }
       if (!failures)
