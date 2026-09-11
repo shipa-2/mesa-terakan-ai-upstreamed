@@ -121,7 +121,8 @@ static bool
 terascale_1_tiled_image_clear_opted_in(void)
 {
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_TILED_IMAGE_CLEAR");
-   return value != NULL && strcmp(value, "1") == 0;
+   return value != NULL && (!strcmp(value, "1") || !strcmp(value, "macro") ||
+                            !strcmp(value, "edge"));
 }
 
 static char const *
@@ -686,6 +687,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                                   enum rv710_linear_image_operation const operation)
 {
    char const * const macro_variant = getenv("TERAKAN_DEBUG_TERASCALE_1_MACROTILED_ROUNDTRIP");
+   char const * const tiled_clear_variant =
+      getenv("TERAKAN_DEBUG_TERASCALE_1_TILED_IMAGE_CLEAR");
    bool const meta_state_only = getenv("TERAKAN_DEBUG_TERASCALE_1_META_STATE_ONLY") != NULL;
    bool const offset_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                             !strcmp(macro_variant, "offset");
@@ -699,12 +702,18 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                            (!strcmp(macro_variant, "layer") || mip_layer_copy || mip_layer_negative);
    bool const layer_negative = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                                !strcmp(macro_variant, "layer-negative");
-   bool const macrotiled = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
-                           (!strcmp(macro_variant, "1") || !strcmp(macro_variant, "edge") ||
-                            offset_copy || mip_copy || layer_copy || layer_negative || mip_layer_negative);
+   bool const roundtrip_macrotiled = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
+                                     (!strcmp(macro_variant, "1") || !strcmp(macro_variant, "edge") ||
+                                      offset_copy || mip_copy || layer_copy || layer_negative ||
+                                      mip_layer_negative);
+   bool const clear_macrotiled = operation == RV710_TILED_IMAGE_CLEAR && tiled_clear_variant &&
+                                 (!strcmp(tiled_clear_variant, "macro") ||
+                                  !strcmp(tiled_clear_variant, "edge"));
+   bool const macrotiled = roundtrip_macrotiled || clear_macrotiled;
    bool const macro_edge = macrotiled &&
                            (offset_copy || mip_copy || layer_copy || layer_negative || mip_layer_negative ||
-                            !strcmp(macro_variant, "edge"));
+                            (roundtrip_macrotiled && !strcmp(macro_variant, "edge")) ||
+                            (clear_macrotiled && !strcmp(tiled_clear_variant, "edge")));
    uint32_t const width = macro_edge ? 129 : macrotiled ? 128 : 2;
    uint32_t const height = macro_edge ? 65 : macrotiled ? 128 : 2;
    uint32_t const byte_count = width * height * 4;
