@@ -523,24 +523,40 @@ terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
    bool const is_r700, uint32_t const conservative_z_export,
    uint32_t * const db_render_control_out, uint32_t * const db_render_override_out)
 {
+   return terakan_hw_config_draw_terascale_1_db_render_control_override_encode_query(
+      evergreen_db_render_control, evergreen_db_render_override, is_r700, conservative_z_export,
+      false, db_render_control_out, db_render_override_out);
+}
+
+bool
+terakan_hw_config_draw_terascale_1_db_render_control_override_encode_query(
+   uint32_t const evergreen_db_render_control, uint32_t const evergreen_db_render_override,
+   bool const is_r700, uint32_t const conservative_z_export, bool const zpass_query_active,
+   uint32_t * const db_render_control_out, uint32_t * const db_render_override_out)
+{
    if (evergreen_db_render_control || evergreen_db_render_override ||
        conservative_z_export > V_028D0C_EXPORT_GREATER_THAN_Z ||
-       (!is_r700 && conservative_z_export != V_028D0C_EXPORT_ANY_Z)) {
+       (!is_r700 && conservative_z_export != V_028D0C_EXPORT_ANY_Z) ||
+       !db_render_control_out || !db_render_override_out) {
       return false;
    }
 
-   /* Exact no-query, no-HTILE branch of r600_emit_db_misc_state(). Its R700 conservative-Z branch
-    * runs before the no-query ZPASS baseline; R600 deliberately skips it. Occlusion queries, HTILE
-    * and depth/stencil copy remain separate unported state transitions.
+   /* Exact query/no-query branches of r600_emit_db_misc_state(). Its R700 conservative-Z branch
+    * runs before the ZPASS state; R600 deliberately skips it. R700's query bit lives in
+    * DB_RENDER_CONTROL, not the Evergreen DB_COUNT_CONTROL address (which is DB_DEPTH_VIEW on
+    * R600/R700). The classic path also disables cull suppression while an occlusion query is active.
+    * HTILE and depth/stencil copy remain separate unported state transitions.
     */
-   *db_render_control_out = S_028D0C_ZPASS_INCREMENT_DISABLE(1) |
-                            (is_r700
-                                ? S_028D0C_CONSERVATIVE_Z_EXPORT(conservative_z_export)
-                                : 0);
+   *db_render_control_out =
+      (zpass_query_active
+          ? (is_r700 ? S_028D0C_R700_PERFECT_ZPASS_COUNTS(1) : 0)
+          : S_028D0C_ZPASS_INCREMENT_DISABLE(1)) |
+      (is_r700 ? S_028D0C_CONSERVATIVE_Z_EXPORT(conservative_z_export) : 0);
    *db_render_override_out =
       S_028D10_FORCE_HIZ_ENABLE(V_028D10_FORCE_DISABLE) |
       S_028D10_FORCE_HIS_ENABLE0(V_028D10_FORCE_DISABLE) |
-      S_028D10_FORCE_HIS_ENABLE1(V_028D10_FORCE_DISABLE);
+      S_028D10_FORCE_HIS_ENABLE1(V_028D10_FORCE_DISABLE) |
+      (zpass_query_active ? S_028D10_NOOP_CULL_DISABLE(1) : 0);
    return true;
 }
 

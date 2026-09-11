@@ -1675,13 +1675,29 @@ static void
 terakan_hw_config_draw_emit_db_count_control(
    struct terakan_gfx_command_writer * const command_writer)
 {
-   /* R_028004_DB_COUNT_CONTROL on R8xx/R9xx is R_028004_DB_DEPTH_VIEW on R600/R700 -- occlusion
-    * query zpass-increment control versus a depth array-slice range, unrelated features that happen
-    * to share this offset. r600_state.c has no DB_COUNT_CONTROL equivalent at all (occlusion query
-    * hazard handling is not surfaced through this register there), so this is not yet researched
-    * rather than guessed at; skipped for TeraScale 1 until it is.
-    */
+   /* R_028004_DB_COUNT_CONTROL on R8xx/R9xx is R_028004_DB_DEPTH_VIEW on R600/R700. Translate
+    * the only query state the classic driver actually uses to the R700 DB_RENDER_CONTROL pair;
+    * never emit the colliding Evergreen address. */
    if (terakan_gfx_command_writer_physical_device(command_writer)->chip_info.is_terascale_1) {
+      bool const is_r700 = terakan_physical_device_chip_family_is_r700(
+         terakan_gfx_command_writer_physical_device(command_writer)->chip_info.chip_family);
+      uint32_t db_render_control, db_render_override;
+      if (!terakan_hw_config_draw_terascale_1_db_render_control_override_encode_query(
+             0, 0, is_r700,
+             G_02880C_CONSERVATIVE_Z_EXPORT(command_writer->hw_config_draw.db_shader_control_),
+             (command_writer->hw_config_draw.db_count_control_ &
+              S_028004_PERFECT_ZPASS_COUNTS(1)) != 0,
+             &db_render_control, &db_render_override)) {
+         return;
+      }
+      uint32_t * packet = terakan_gfx_command_writer_emit(
+         command_writer, TERAKAN_GFX_COMMAND_WRITER_EMIT_CONTENTS_CONFIG, 2 + 2);
+      if (unlikely(packet == NULL)) {
+         return;
+      }
+      packet = terakan_hw_config_draw_terascale_1_write_db_render_control_override(
+         packet, db_render_control, db_render_override);
+      terakan_gfx_command_writer_emit_done(command_writer, packet);
       return;
    }
    terakan_hw_config_draw_emit_context_register(command_writer, R_028004_DB_COUNT_CONTROL,

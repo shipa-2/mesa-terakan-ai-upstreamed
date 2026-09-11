@@ -185,6 +185,36 @@ test_db_render_control_conservative_z(void)
       0, 0, true, V_028D0C_EXPORT_RESERVED, &db_render_control, &db_render_override));
 }
 
+static void
+test_db_render_control_occlusion_query(void)
+{
+   uint32_t db_render_control, db_render_override;
+   CHECK(terakan_hw_config_draw_terascale_1_db_render_control_override_encode_query(
+      0, 0, true, V_028D0C_EXPORT_ANY_Z, true, &db_render_control, &db_render_override));
+   CHECK(db_render_control == S_028D0C_R700_PERFECT_ZPASS_COUNTS(1));
+   CHECK(db_render_override ==
+         (S_028D10_FORCE_HIZ_ENABLE(V_028D10_FORCE_DISABLE) |
+          S_028D10_FORCE_HIS_ENABLE0(V_028D10_FORCE_DISABLE) |
+          S_028D10_FORCE_HIS_ENABLE1(V_028D10_FORCE_DISABLE) |
+          S_028D10_NOOP_CULL_DISABLE(1)));
+
+   /* R600 has no R700 perfect-count bit, but the classic path still disables cull suppression
+    * while a ZPASS query is active. This guards against blindly copying the R700 bit to R600. */
+   CHECK(terakan_hw_config_draw_terascale_1_db_render_control_override_encode_query(
+      0, 0, false, V_028D0C_EXPORT_ANY_Z, true, &db_render_control, &db_render_override));
+   CHECK(db_render_control == 0);
+   CHECK((db_render_override & S_028D10_NOOP_CULL_DISABLE(1)) != 0);
+
+   /* Negative controls: the colliding Evergreen DB_COUNT_CONTROL payload and
+    * R600 conservative-Z encodings must not be silently reinterpreted. */
+   CHECK(!terakan_hw_config_draw_terascale_1_db_render_control_override_encode_query(
+      (UINT32_C(1) << 1), 0, true, V_028D0C_EXPORT_ANY_Z, true,
+      &db_render_control, &db_render_override));
+   CHECK(!terakan_hw_config_draw_terascale_1_db_render_control_override_encode_query(
+      0, 0, false, V_028D0C_EXPORT_GREATER_THAN_Z, true,
+      &db_render_control, &db_render_override));
+}
+
 static struct terakan_hw_config_draw_terascale_1_db_shader_control_input
 representative_db_shader_control_input(void)
 {
@@ -1059,6 +1089,7 @@ main(void)
    test_db_render_control_override();
    test_db_render_control_override_classic_r700_baseline();
    test_db_render_control_conservative_z();
+   test_db_render_control_occlusion_query();
    test_db_shader_control();
    test_db_shader_control_rejects_evergreen_only_fields();
    test_db_depth_size();

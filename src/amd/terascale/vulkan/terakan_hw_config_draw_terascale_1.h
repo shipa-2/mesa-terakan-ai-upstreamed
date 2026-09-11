@@ -274,6 +274,14 @@ bool terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
    uint32_t conservative_z_export,
    uint32_t * db_render_control_out, uint32_t * db_render_override_out);
 
+/* Query state is separate from the Evergreen DB_COUNT_CONTROL payload. R700 counts Z passes by
+ * setting R700_PERFECT_ZPASS_COUNTS in DB_RENDER_CONTROL and disabling cull suppression in the
+ * paired override; R600 has the latter but no R700 perfect-count bit. */
+bool terakan_hw_config_draw_terascale_1_db_render_control_override_encode_query(
+   uint32_t evergreen_db_render_control, uint32_t evergreen_db_render_override, bool is_r700,
+   uint32_t conservative_z_export, bool zpass_query_active,
+   uint32_t * db_render_control_out, uint32_t * db_render_override_out);
+
 /* PKT3_SET_CONTEXT_REG_SEQ(DB_RENDER_CONTROL, DB_RENDER_OVERRIDE), 2 dwords. Values must already
  * be R700-shaped, normally produced by the encoder above. This two-register sequence is confirmed
  * against r600_emit_db_misc_state(), not inferred from the adjacent register addresses.

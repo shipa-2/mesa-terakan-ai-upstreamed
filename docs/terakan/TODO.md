@@ -1097,10 +1097,7 @@ same split between `r600_state.c` and `evergreen_state.c`.
   `terakan_hw_config_draw_emit_db_render_override2()` (no R600/R700
   equivalent exists at all -- confirmed against `r600_state.c`, not
   assumed from the header alone -- and its offset is `DB_DEPTH_INFO`
-  there), `_emit_db_count_control()` (its offset is `DB_DEPTH_VIEW` on
-  R600/R700, and no `DB_COUNT_CONTROL`-equivalent occlusion-query-hazard
-  register was found in `r600_state.c` to replace it with -- not yet
-  researched, not guessed), and `_emit_db_depth_stencil_buffer()` --
+  there), and `_emit_db_depth_stencil_buffer()` --
   the single most dangerous one, since its whole
   `R_028040_DB_Z_INFO..R_02805C_DB_DEPTH_SLICE` range is
   `R_028040_CB_COLOR0_BASE..R_02805C_CB_COLOR7_BASE` (render target
@@ -1114,6 +1111,18 @@ same split between `r600_state.c` and `evergreen_state.c`.
   surface/macro-tile address math -- see the tiling/surface addressing row
   in the P0-equivalent table above and the bullet below for what exists
   of it so far).
+
+  The occlusion-query portion formerly hidden behind `_emit_db_count_control()`
+  is now translated for TeraScale 1 instead of writing the colliding
+  Evergreen address.  The CPU encoder follows `r600_emit_db_misc_state()`
+  and `r600d.h`: an active R700 query sets `R700_PERFECT_ZPASS_COUNTS` in
+  `DB_RENDER_CONTROL` and `NOOP_CULL_DISABLE` in the paired override; R600
+  has only the latter and deliberately receives no R700 bit.  The no-query
+  path keeps `ZPASS_INCREMENT_DISABLE` and the existing no-HTILE baseline.
+  The unit oracle checks both generations and rejects invalid Evergreen-only
+  payloads.  This proves only CPU packet construction: no query command
+  stream or result readback has been submitted on RV710, and the normal
+  TeraScale 1 submit guard remains.
 
 - TeraScale 1 (R600/R700) surface pitch/height/base-alignment math:
   `terakan_image_tiling_terascale_1_alignments_linear_aligned()`/
