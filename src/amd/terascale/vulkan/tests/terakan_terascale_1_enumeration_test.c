@@ -1173,7 +1173,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             }
             if (row[x] != expected) {
                ++mismatch_count;
-               if (!layer_negative && !mip_layer_negative) {
+               if (!layer_negative && !mip_layer_negative && !clear_layer_negative) {
                   fprintf(stderr,
                           "  RV710 linear image %s mismatch at (%u,%u): got 0x%08x expected 0x%08x\n",
                           operation == RV710_LINEAR_IMAGE_CLEAR || operation == RV710_TILED_IMAGE_CLEAR

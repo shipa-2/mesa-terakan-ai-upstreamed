@@ -286,6 +286,12 @@ omission of `levelCount=1` in the explicit clear ranges and failed by reading th
 that was corrected before the reported series. This is evidence for one array-layer/bank-rotation
 boundary, not combined mip/layer addressing, MSAA or general submission.
 
+The `mip-layer` and `mip-layer-negative` clear modes then selected level 1/layer 1 versus level
+0/layer 0 in the same 129x65 two-level, two-layer image. The positive mode passed and the negative
+mode observed all 8385 expected mismatches, with no kernel-journal entries; mismatch logging is
+suppressed for that intentional negative control. This is a combined selector result, not a claim
+that every mip/layer layout or format is correct.
+
 The next image-to-buffer attempt established a separate safety boundary. Its generation-neutral
 NIR shader still writes the destination with `MEM_RAT`, but the R600/R700 CB converter deliberately
 rejects Evergreen-shaped buffer UAV descriptors. Letting the draw continue with that UAV unbound
