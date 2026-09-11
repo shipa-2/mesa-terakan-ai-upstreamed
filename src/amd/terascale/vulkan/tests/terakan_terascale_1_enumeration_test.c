@@ -400,10 +400,12 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
    char const * const macro_variant = getenv("TERAKAN_DEBUG_TERASCALE_1_MACROTILED_ROUNDTRIP");
    bool const offset_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                             !strcmp(macro_variant, "offset");
+   bool const mip_layer_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
+                               !strcmp(macro_variant, "mip-layer");
    bool const mip_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
-                         !strcmp(macro_variant, "mip");
+                         (!strcmp(macro_variant, "mip") || mip_layer_copy);
    bool const layer_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
-                           !strcmp(macro_variant, "layer");
+                           (!strcmp(macro_variant, "layer") || mip_layer_copy);
    bool const layer_negative = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                                !strcmp(macro_variant, "layer-negative");
    bool const macrotiled = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
