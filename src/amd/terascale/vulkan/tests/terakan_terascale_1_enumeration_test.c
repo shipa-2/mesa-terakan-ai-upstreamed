@@ -110,6 +110,13 @@ terascale_1_tiled_image_roundtrip_opted_in(void)
    return value != NULL && strcmp(value, "1") == 0;
 }
 
+static char const *
+terascale_1_bc1_roundtrip_mode(void)
+{
+   char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_BC1_ROUNDTRIP");
+   return value != NULL && (!strcmp(value, "1") || !strcmp(value, "negative")) ? value : NULL;
+}
+
 static uint32_t
 check_rv710_signal_only_submit(VkDevice const device, VkQueue const queue)
 {
@@ -374,6 +381,208 @@ cleanup:
       vkDestroyBuffer(device, buffers[buffer_index], NULL);
       vkFreeMemory(device, memories[buffer_index], NULL);
    }
+   return failures;
+}
+
+/* Linear BC1 is deliberately isolated from the still-unsupported tiled BC1 path.  The 8x8
+ * image contains four 8-byte blocks; inverse sentinels make a skipped or partial transfer fail.
+ * The negative mode copies one block column and requires the untouched second column to remain
+ * inverse.  This checks the block-row pitch/addressing boundary, but does not prove optimal/tiled
+ * BC1 layout or format filtering on other R700 chips. */
+static uint32_t
+check_rv710_linear_bc1_roundtrip(VkPhysicalDevice const physical_device, VkDevice const device,
+                                 VkQueue const queue, bool const negative)
+{
+   enum { block_bytes = 8, block_columns = 2, block_rows = 2, byte_count = 32 };
+   uint8_t source[byte_count], inverse[byte_count];
+   for (uint32_t i = 0; i < byte_count; ++i) {
+      source[i] = (uint8_t)(0x31u + i * 7u);
+      inverse[i] = (uint8_t)~source[i];
+   }
+   VkImage image = VK_NULL_HANDLE;
+   VkBuffer buffer = VK_NULL_HANDLE;
+   VkDeviceMemory image_memory = VK_NULL_HANDLE, buffer_memory = VK_NULL_HANDLE;
+   uint8_t *image_mapping = NULL, *buffer_mapping = NULL;
+   VkCommandPool command_pool = VK_NULL_HANDLE;
+   VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+   VkFence fence = VK_NULL_HANDLE;
+   uint32_t failures = 0;
+   VkPhysicalDeviceMemoryProperties properties;
+   vkGetPhysicalDeviceMemoryProperties(physical_device, &properties);
+   VkImageCreateInfo const image_info = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .imageType = VK_IMAGE_TYPE_2D,
+      .format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK,
+      .extent = {8, 8, 1},
+      .mipLevels = 1, .arrayLayers = 1,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .tiling = VK_IMAGE_TILING_LINEAR,
+      .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+      .initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED,
+   };
+   VkResult result = vkCreateImage(device, &image_info, NULL, &image);
+   VkMemoryRequirements image_requirements = {0};
+   if (result == VK_SUCCESS)
+      vkGetImageMemoryRequirements(device, image, &image_requirements);
+   uint32_t image_type = UINT32_MAX;
+   for (uint32_t i = 0; result == VK_SUCCESS && i < properties.memoryTypeCount; ++i)
+      if ((image_requirements.memoryTypeBits & ((uint32_t)1 << i)) &&
+          (properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+         image_type = i;
+         break;
+      }
+   if (result == VK_SUCCESS && image_type == UINT32_MAX)
+      result = VK_ERROR_FEATURE_NOT_PRESENT;
+   VkMemoryAllocateInfo const image_alloc = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = result == VK_SUCCESS ? image_requirements.size : 0,
+      .memoryTypeIndex = image_type,
+   };
+   if (result == VK_SUCCESS)
+      result = vkAllocateMemory(device, &image_alloc, NULL, &image_memory);
+   if (result == VK_SUCCESS)
+      result = vkBindImageMemory(device, image, image_memory, 0);
+   if (result == VK_SUCCESS)
+      result = vkMapMemory(device, image_memory, 0, VK_WHOLE_SIZE, 0, (void **)&image_mapping);
+   VkImageSubresource const subresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
+   VkSubresourceLayout image_layout = {0};
+   if (result == VK_SUCCESS) {
+      vkGetImageSubresourceLayout(device, image, &subresource, &image_layout);
+      for (uint32_t row = 0; row < block_rows; ++row)
+         memcpy(image_mapping + image_layout.offset + row * image_layout.rowPitch,
+                inverse + row * block_columns * block_bytes, block_columns * block_bytes);
+   }
+   VkBufferCreateInfo const buffer_info = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = byte_count,
+      .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+   };
+   if (result == VK_SUCCESS)
+      result = vkCreateBuffer(device, &buffer_info, NULL, &buffer);
+   VkMemoryRequirements buffer_requirements = {0};
+   if (result == VK_SUCCESS)
+      vkGetBufferMemoryRequirements(device, buffer, &buffer_requirements);
+   uint32_t buffer_type = UINT32_MAX;
+   for (uint32_t i = 0; result == VK_SUCCESS && i < properties.memoryTypeCount; ++i)
+      if ((buffer_requirements.memoryTypeBits & ((uint32_t)1 << i)) &&
+          (properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+         buffer_type = i;
+         break;
+      }
+   if (result == VK_SUCCESS && buffer_type == UINT32_MAX)
+      result = VK_ERROR_FEATURE_NOT_PRESENT;
+   VkMemoryAllocateInfo const buffer_alloc = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = result == VK_SUCCESS ? buffer_requirements.size : 0,
+      .memoryTypeIndex = buffer_type,
+   };
+   if (result == VK_SUCCESS)
+      result = vkAllocateMemory(device, &buffer_alloc, NULL, &buffer_memory);
+   if (result == VK_SUCCESS)
+      result = vkBindBufferMemory(device, buffer, buffer_memory, 0);
+   if (result == VK_SUCCESS)
+      result = vkMapMemory(device, buffer_memory, 0, VK_WHOLE_SIZE, 0, (void **)&buffer_mapping);
+   if (result == VK_SUCCESS) {
+      memcpy(buffer_mapping, source, byte_count);
+      VkMappedMemoryRange ranges[2] = {
+         {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = image_memory, .size = VK_WHOLE_SIZE},
+         {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = buffer_memory, .size = VK_WHOLE_SIZE},
+      };
+      result = vkFlushMappedMemoryRanges(device, 2, ranges);
+   }
+   VkCommandPoolCreateInfo const pool_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                                               .queueFamilyIndex = 0};
+   VkCommandBufferAllocateInfo const alloc_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                                                    .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                                                    .commandBufferCount = 1};
+   VkCommandBufferBeginInfo const begin_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+   if (result == VK_SUCCESS)
+      result = vkCreateCommandPool(device, &pool_info, NULL, &command_pool);
+   if (result == VK_SUCCESS) {
+      VkCommandBufferAllocateInfo info = alloc_info;
+      info.commandPool = command_pool;
+      result = vkAllocateCommandBuffers(device, &info, &command_buffer);
+   }
+   if (result == VK_SUCCESS)
+      result = vkBeginCommandBuffer(command_buffer, &begin_info);
+   VkImageMemoryBarrier const initial = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+      .oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = image, .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                           .levelCount = 1, .layerCount = 1},
+   };
+   VkBufferImageCopy const region = {
+      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
+      .imageExtent = {negative ? 4u : 8u, 8, 1},
+   };
+   if (result == VK_SUCCESS) {
+      vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           0, 0, NULL, 0, NULL, 1, &initial);
+      vkCmdCopyBufferToImage(command_buffer, buffer, image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+      VkImageMemoryBarrier const host = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+         .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+         .oldLayout = VK_IMAGE_LAYOUT_GENERAL, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+         .image = image, .subresourceRange = initial.subresourceRange,
+      };
+      vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                           0, 0, NULL, 0, NULL, 1, &host);
+      result = vkEndCommandBuffer(command_buffer);
+   }
+   VkFenceCreateInfo const fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+   if (result == VK_SUCCESS)
+      result = vkCreateFence(device, &fence_info, NULL, &fence);
+   VkSubmitInfo const submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                                .commandBufferCount = 1, .pCommandBuffers = &command_buffer};
+   if (result == VK_SUCCESS)
+      result = vkQueueSubmit(queue, 1, &submit, fence);
+   if (result == VK_SUCCESS)
+      result = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_C(5000000000));
+   if (result == VK_SUCCESS) {
+      VkMappedMemoryRange const invalidate = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+                                              .memory = image_memory, .size = VK_WHOLE_SIZE};
+      result = vkInvalidateMappedMemoryRanges(device, 1, &invalidate);
+   }
+   if (result != VK_SUCCESS) {
+      fprintf(stderr, "  RV710 linear BC1 %s submission failed with %d\n",
+              negative ? "negative" : "roundtrip", result);
+      failures = 1;
+   } else {
+      uint32_t mismatches = 0;
+      for (uint32_t row = 0; row < block_rows; ++row)
+         for (uint32_t col = 0; col < block_columns; ++col)
+            for (uint32_t byte = 0; byte < block_bytes; ++byte) {
+               uint8_t const expected = negative && col == 1
+                                           ? inverse[(row * block_columns + col) * block_bytes + byte]
+                                           : source[(row * block_columns + col) * block_bytes + byte];
+               if (image_mapping[image_layout.offset + row * image_layout.rowPitch +
+                                 col * block_bytes + byte] != expected)
+                  ++mismatches;
+            }
+      uint32_t const expected_mismatches = negative ? block_rows * block_bytes : 0;
+      if (mismatches != expected_mismatches) {
+         fprintf(stderr, "  RV710 linear BC1 %s observed %u mismatches, expected %u\n",
+                 negative ? "negative control" : "roundtrip", mismatches, expected_mismatches);
+         failures = 1;
+      } else {
+         fprintf(stderr, "  RV710 linear BC1 %s completed%s\n", negative ? "negative control" : "roundtrip",
+                 negative ? " with expected untouched block column" : "");
+      }
+   }
+   if (fence != VK_NULL_HANDLE) vkDestroyFence(device, fence, NULL);
+   if (command_buffer != VK_NULL_HANDLE) vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+   if (command_pool != VK_NULL_HANDLE) vkDestroyCommandPool(device, command_pool, NULL);
+   if (image_mapping != NULL) vkUnmapMemory(device, image_memory);
+   if (buffer_mapping != NULL) vkUnmapMemory(device, buffer_memory);
+   if (image != VK_NULL_HANDLE) vkDestroyImage(device, image, NULL);
+   if (buffer != VK_NULL_HANDLE) vkDestroyBuffer(device, buffer, NULL);
+   if (image_memory != VK_NULL_HANDLE) vkFreeMemory(device, image_memory, NULL);
+   if (buffer_memory != VK_NULL_HANDLE) vkFreeMemory(device, buffer_memory, NULL);
    return failures;
 }
 
@@ -1325,8 +1534,12 @@ main(void)
                fprintf(stderr, "  TeraScale 1 queue submission remains safely disabled\n");
             }
          } else if (properties.deviceID == 0x954f) {
+            char const * const bc1_mode = terascale_1_bc1_roundtrip_mode();
             failures +=
-               terascale_1_linear_image_readback_opted_in() ||
+               bc1_mode != NULL
+                  ? check_rv710_linear_bc1_roundtrip(physical_devices[device_index], device, queue,
+                                                     !strcmp(bc1_mode, "negative"))
+               : terascale_1_linear_image_readback_opted_in() ||
                      terascale_1_linear_image_clear_opted_in() ||
                      terascale_1_linear_buffer_upload_opted_in() ||
                      terascale_1_tiled_image_roundtrip_opted_in()
