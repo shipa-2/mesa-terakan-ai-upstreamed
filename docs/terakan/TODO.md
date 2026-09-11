@@ -750,6 +750,13 @@ same split between `r600_state.c` and `evergreen_state.c`.
   The RV710 is still awaiting a clean reboot after an earlier metadata
   experiment locked ring 0, so this probe has not yet run on hardware.
 
+  A remote `TERAKAN_DEBUG_DRY_RUN_SUBMIT=1` capture on the same RV710 did
+  construct a 536-dword graphics IB with four BO relocations and no
+  Evergreen `INDEX_BUFFER_SIZE` (0x13), `PFP_SYNC_ME` (0x42), or CS partial
+  flush (0x07) packet. The diagnostic correctly returns `VK_ERROR_UNKNOWN`
+  before DRM submission, so this is command-stream inspection only and not a
+  hardware execution result.
+
 - TeraScale 1 no longer replays the Evergreen-only draw-constant array after
   the dedicated per-indirect-buffer begin atom. That atom already transcribes
   the complete applicable `r600_init_atom_start_cs()` baseline and has an exact
