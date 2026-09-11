@@ -194,10 +194,11 @@ journal stayed clean. This remains a boundary check, not a substitute for image 
 
 The new `TERAKAN_DEBUG_TERASCALE_1_CP_DMA_LARGE_COPY=1` probe crosses the R600/R700 packet limit:
 it copies 2 MiB, eight bytes beyond the `2^21 - 8` maximum, so the command writer must emit a
-legal full-size packet followed by the remainder. On the RV710 run, all 524288 dwords matched and
-the inverse destination pattern provided the skipped-transfer negative control; the kernel journal
-was empty. This is one 2 MiB linear buffer split/readback on RV710, not evidence for image CP-DMA,
-fill packets, cache transitions, or general submission safety. The default submit guard remains.
+legal full-size packet followed by the remainder. Five consecutive RV710 runs matched all 524288
+dwords; the inverse destination pattern provided the skipped-transfer negative control and the
+kernel journal was empty for the series. This is a 2 MiB linear buffer split/readback on RV710,
+not evidence for image CP-DMA, fill packets, cache transitions, or general submission safety. The
+default submit guard remains.
 
 The opt-in CP-DMA fill probe (`TERAKAN_DEBUG_TERASCALE_1_CP_DMA_FILL=1`) is deliberately not
 counted as working on RV710: three consecutive attempts returned `VK_ERROR_UNKNOWN` (`-13`) from
