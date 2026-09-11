@@ -273,6 +273,11 @@ host-visible target for readback. Five consecutive RV710 runs produced the reque
 every texel, while the inverse linear-image sentinel detects a skipped clear or copy; the kernel
 journal stayed empty. This is the first tiled CB clear/readback result, still limited to one
 single-sample RGBA8 level and not evidence for macrotiles, layers, MSAA or general submission.
+The same probe now has `macro` and `edge` modes for 128x128 and 129x65 optimal images. Each mode
+passed five consecutive RV710 runs, including the padded edge extent, with no kernel-journal
+entries; every texel matched the clear value and the inverse sentinel remained an effective
+skipped-operation control. This closes only the level-zero single-sample RGBA8 macro CB readback
+shape, not array-layer bank rotation, MSAA metadata or arbitrary formats.
 
 The next image-to-buffer attempt established a separate safety boundary. Its generation-neutral
 NIR shader still writes the destination with `MEM_RAT`, but the R600/R700 CB converter deliberately
