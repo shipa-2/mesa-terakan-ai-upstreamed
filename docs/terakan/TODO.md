@@ -193,6 +193,12 @@ destination dword retained its inverse-pattern sentinel; the kernel journal stay
 one successful boundary observation, not a substitute for a repeated stress series or for image
 copy validation.
 
+The opt-in CP-DMA fill probe (`TERAKAN_DEBUG_TERASCALE_1_CP_DMA_FILL=1`) is deliberately not
+counted as working on RV710: three consecutive attempts returned `VK_ERROR_UNKNOWN` (`-13`) from
+the transfer submission path, with no kernel journal entry. The existing copy/readback probes are
+still valid, but fill remains unsupported pending a packet-level audit of R600/R700 fill semantics;
+the submit guard is unchanged.
+
 The first graphics-state submission has now passed the RV710 kernel parser and fence through the
 complete draw-state and SQK emission when the draw packet itself is replaced by TYPE2 padding.
 The earlier apparent failure at `CB_COLORn_INFO` was a localization error: the passing prefix
