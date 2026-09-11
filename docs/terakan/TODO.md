@@ -278,6 +278,13 @@ passed five consecutive RV710 runs, including the padded edge extent, with no ke
 entries; every texel matched the clear value and the inverse sentinel remained an effective
 skipped-operation control. This closes only the level-zero single-sample RGBA8 macro CB readback
 shape, not array-layer bank rotation, MSAA metadata or arbitrary formats.
+The `layer` and `layer-negative` modes extend this to a two-layer 129x65 optimal image: layer 0 is
+cleared magenta, layer 1 green, and the selected layer is copied to the linear target. Five runs
+of each mode passed on RV710 with no kernel-journal entries; the negative mode observed all 8385
+expected mismatches when it deliberately selected layer 0. The first attempt exposed a test-only
+omission of `levelCount=1` in the explicit clear ranges and failed by reading the magenta sentinel;
+that was corrected before the reported series. This is evidence for one array-layer/bank-rotation
+boundary, not combined mip/layer addressing, MSAA or general submission.
 
 The next image-to-buffer attempt established a separate safety boundary. Its generation-neutral
 NIR shader still writes the destination with `MEM_RAT`, but the R600/R700 CB converter deliberately
