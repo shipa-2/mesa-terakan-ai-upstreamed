@@ -291,6 +291,7 @@ struct terakan_app_config_draw {
 
       struct {
          struct terakan_vertex_input_fs_resource_usage usage;
+         struct terakan_vertex_input_fs_layout layout;
       } from_apply_sq_pgm_fetch;
    } sq_resources_fetch_;
 

@@ -137,6 +137,19 @@ struct terakan_vertex_input_fs_resource_usage {
    uint8_t resource_bindings_and_truncation[TERAKAN_RESOURCE_HW_COUNT_FETCH];
 };
 
+/* Return the number of dwords that must be subtracted from a fetch descriptor for a
+ * particular resource when its base address is VA.  On pre-R9xx hardware the
+ * bounds check starts at the first naturally aligned chunk of each element.  The
+ * old static value is correct only when the buffer binding itself is naturally
+ * aligned; Vulkan permits arbitrary binding offsets, so the actual address must
+ * participate in the calculation.  R9xx checks the whole element and therefore
+ * always returns zero.
+ */
+uint8_t terakan_vertex_input_fs_resource_truncation(
+   struct terakan_vertex_input_fs_layout const * layout,
+   struct terakan_vertex_input_fs_resource_usage const * usage,
+   unsigned resource_index, bool is_r9xx, uint64_t va);
+
 static inline bool
 terakan_vertex_input_fs_resource_usage_equal(
    struct terakan_vertex_input_fs_resource_usage const * const a,

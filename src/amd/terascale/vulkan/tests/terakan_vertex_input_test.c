@@ -50,6 +50,21 @@ float32_fetch_word1(void)
    return terakan_vertex_input_format_fetch_word1(&format);
 }
 
+static uint32_t
+float32x4_fetch_word1(void)
+{
+   struct terascale_format_info const format = {
+      .format = TERASCALE_FORMAT_INDEX_32_32_32_32_FLOAT,
+      .number_type = TERASCALE_FORMAT_NUMBER_TYPE_FLOAT,
+      .swizzle_r = TERASCALE_SWIZZLE_X,
+      .swizzle_g = TERASCALE_SWIZZLE_Y,
+      .swizzle_b = TERASCALE_SWIZZLE_Z,
+      .swizzle_a = TERASCALE_SWIZZLE_W,
+      .supports_sq_vertex_fetch = true,
+   };
+   return terakan_vertex_input_format_fetch_word1(&format);
+}
+
 static void
 check_canary(uint8_t const * bytes, size_t const size)
 {
@@ -145,6 +160,33 @@ test_unbound_attribute(void)
    CHECK(code.pre_fetch_alu_qwords != 0);
 }
 
+static void
+test_dynamic_binding_offset_truncation(void)
+{
+   struct terakan_vertex_input_fs_layout const layout = {
+      .attributes_used = BITFIELD_BIT(0),
+      .attribute_format_fetch_word1[0] = 0,
+      .attribute_bindings[0] = 0,
+      .attribute_offsets[0] = 0,
+   };
+   struct terakan_vertex_input_fs_layout mutable_layout = layout;
+   mutable_layout.attribute_format_fetch_word1[0] = float32x4_fetch_word1();
+
+   struct terakan_vertex_input_fs_resource_usage usage;
+   struct terakan_vertex_input_fs_code code;
+   create_checked(&mutable_layout, &usage, &code);
+   CHECK((usage.resources_used & BITFIELD_BIT(0)) != 0);
+   CHECK((usage.resource_bindings_and_truncation[0] >> 5) == 0);
+
+   /* A 2-byte VkBuffer binding offset leaves only the first dword naturally aligned.  The
+    * previous attribute-only calculation returned zero here, which left the final 12 bytes
+    * outside the descriptor bound. */
+   CHECK(terakan_vertex_input_fs_resource_truncation(&mutable_layout, &usage, 0, false, 2) == 3);
+   CHECK(terakan_vertex_input_fs_resource_truncation(&mutable_layout, &usage, 0, false,
+                                                     UINT64_C(0x1000)) == 0);
+   CHECK(terakan_vertex_input_fs_resource_truncation(&mutable_layout, &usage, 0, true, 2) == 0);
+}
+
 int
 main(void)
 {
@@ -152,5 +194,6 @@ main(void)
    test_highest_indices();
    test_all_attributes_and_bindings();
    test_unbound_attribute();
+   test_dynamic_binding_offset_truncation();
    return 0;
 }

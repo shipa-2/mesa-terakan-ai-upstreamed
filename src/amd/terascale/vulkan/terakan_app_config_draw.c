@@ -565,9 +565,16 @@ terakan_app_config_draw_apply_sq_pgm_fetch(struct terakan_gfx_command_writer * c
                                       fs->resource_usage.resources_used);
 
    TERAKAN_APP_CONFIG_DRAW_ASSERT_MAY_DEPEND_ON(SQ_RESOURCES_FETCH, SQ_PGM_FETCH);
+   bool const is_terascale_1 =
+      terakan_device_physical_device(device)->chip_info.is_terascale_1;
    if (!terakan_vertex_input_fs_resource_usage_equal(
-          &config->sq_resources_fetch_.from_apply_sq_pgm_fetch.usage, &fs->resource_usage)) {
+          &config->sq_resources_fetch_.from_apply_sq_pgm_fetch.usage, &fs->resource_usage) ||
+       (is_terascale_1 && !terakan_vertex_input_fs_layout_identical(
+          &config->sq_resources_fetch_.from_apply_sq_pgm_fetch.layout, &fs->layout))) {
       config->sq_resources_fetch_.from_apply_sq_pgm_fetch.usage = fs->resource_usage;
+      if (is_terascale_1) {
+         config->sq_resources_fetch_.from_apply_sq_pgm_fetch.layout = fs->layout;
+      }
       terakan_app_config_draw_set_pending(config, TERAKAN_APP_CONFIG_DRAW_ENTRY_SQ_RESOURCES_FETCH);
    }
 }
@@ -600,7 +607,21 @@ terakan_app_config_draw_apply_sq_resources_fetch(
       }
       uint64_t const va = config->sq_resources_fetch_.va[binding];
       uint32_t const app_size_minus_1 = config->sq_resources_fetch_.size_minus_1[binding];
-      uint8_t const truncation_bytes = sizeof(uint32_t) * (binding_and_truncation >> 5);
+      uint8_t const static_truncation = binding_and_truncation >> 5;
+      /* The static fetch-shader truncation assumes a naturally aligned binding base.  The
+       * descriptor address includes VkBuffer's dynamic binding offset, so recompute the first
+       * naturally aligned chunk at the actual VA and retain the static value as a lower bound.
+       * This only changes pre-R9xx behavior; R9xx returns zero from the helper.
+       */
+      uint8_t const dynamic_truncation =
+         terakan_gfx_command_writer_physical_device(command_writer)->chip_info.is_terascale_1
+            ? terakan_vertex_input_fs_resource_truncation(
+                 &config->sq_resources_fetch_.from_apply_sq_pgm_fetch.layout,
+                 &config->sq_resources_fetch_.from_apply_sq_pgm_fetch.usage, resource_index,
+                 terakan_gfx_command_writer_physical_device(command_writer)->chip_info.is_r9xx, va)
+            : 0;
+      uint8_t const truncation_bytes =
+         sizeof(uint32_t) * MAX2(static_truncation, dynamic_truncation);
       descriptor.resource[0] = (uint32_t)va;
       descriptor.resource[1] = MAX2(app_size_minus_1, truncation_bytes) - truncation_bytes;
       /* Not using `S_030008_STRIDE` because R9xx increased the width of the stride from 11 to 12

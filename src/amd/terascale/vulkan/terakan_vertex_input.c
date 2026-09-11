@@ -115,6 +115,39 @@ terakan_vertex_input_fs_layout_identical(struct terakan_vertex_input_fs_layout c
    return true;
 }
 
+uint8_t
+terakan_vertex_input_fs_resource_truncation(
+   struct terakan_vertex_input_fs_layout const * const layout,
+   struct terakan_vertex_input_fs_resource_usage const * const usage,
+   unsigned const resource_index, bool const is_r9xx, uint64_t const va)
+{
+   assert(resource_index < TERAKAN_RESOURCE_HW_COUNT_FETCH);
+   if (is_r9xx || !(usage->resources_used & BITFIELD_BIT(resource_index))) {
+      return 0;
+   }
+
+   uint8_t const binding = usage->resource_bindings_and_truncation[resource_index] & 0x1Fu;
+   uint8_t truncation = 0;
+   u_foreach_bit (attribute_index, layout->attributes_used) {
+      if (layout->attribute_bindings[attribute_index] != binding) {
+         continue;
+      }
+      uint32_t const word1 = layout->attribute_format_fetch_word1[attribute_index];
+      uint32_t const bytes = terascale_format_bytes_per_block[G_SQ_VTX_WORD1_DATA_FORMAT(word1)];
+      if (bytes == 0) {
+         continue;
+      }
+
+      uint64_t const address = va + layout->attribute_offsets[attribute_index];
+      unsigned const address_alignment_log2 = address != 0 ? __builtin_ctzll(address) : 64;
+      uint32_t const alignment = address_alignment_log2 < 31 ? 1u << address_alignment_log2
+                                                              : UINT32_MAX;
+      uint32_t const checked_bytes = MIN2(bytes, MAX2(4u, alignment));
+      truncation = MAX2(truncation, (uint8_t)((bytes - checked_bytes) / sizeof(uint32_t)));
+   }
+   return truncation;
+}
+
 /* In the beginning of the software vertex stage shader:
  * R0.X = 0-based vertex index + `VGT_INDX_OFFSET`
  * R0.W = 0-based instance index
