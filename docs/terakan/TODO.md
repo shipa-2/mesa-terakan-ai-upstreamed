@@ -356,7 +356,7 @@ now passes on RV710: an 8x8 linear BC1 image (four 8-byte blocks) is initialized
 sentinels, uploaded through the TeraScale 1 CP-DMA path, and all 32 bytes read back correctly.
 The `negative` mode uses a 40-byte source buffer with `bufferOffset = 8`; it also passes by
 observing the shifted 32-byte image, so ignoring the offset or skipping the transfer is detected.
-Both modes pass on three consecutive remote runs with no new kernel journal entries. This proves
+Both modes pass in the final paired remote run with no new kernel journal entries. This proves
 only linear BC1 block addressing/offset handling on RV710; tiled BC1, mip/layer BC1, and format
 filtering on other R700 chips remain unverified and tiled BC1 remains explicitly rejected.
 The existing CPU tiling test also fixes this exact fixture: 384x144 base, 256x128 padded mip,
