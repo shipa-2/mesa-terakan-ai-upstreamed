@@ -826,13 +826,15 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             }
             if (row[x] != expected) {
                ++mismatch_count;
-               fprintf(stderr,
-                       "  RV710 linear image %s mismatch at (%u,%u): got 0x%08x expected 0x%08x\n",
-                       operation == RV710_LINEAR_IMAGE_CLEAR     ? "clear"
-                       : operation == RV710_TILED_IMAGE_ROUNDTRIP ? "tiled roundtrip"
-                                                                  : "buffer upload",
-                       x, y,
-                       row[x], expected);
+               if (!layer_negative) {
+                  fprintf(stderr,
+                          "  RV710 linear image %s mismatch at (%u,%u): got 0x%08x expected 0x%08x\n",
+                          operation == RV710_LINEAR_IMAGE_CLEAR     ? "clear"
+                          : operation == RV710_TILED_IMAGE_ROUNDTRIP ? "tiled roundtrip"
+                                                                     : "buffer upload",
+                          x, y,
+                          row[x], expected);
+               }
                failures = 1;
             }
          }
