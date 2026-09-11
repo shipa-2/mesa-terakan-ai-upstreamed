@@ -666,6 +666,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                                   enum rv710_linear_image_operation const operation)
 {
    char const * const macro_variant = getenv("TERAKAN_DEBUG_TERASCALE_1_MACROTILED_ROUNDTRIP");
+   bool const meta_state_only = getenv("TERAKAN_DEBUG_TERASCALE_1_META_STATE_ONLY") != NULL;
    bool const offset_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                             !strcmp(macro_variant, "offset");
    bool const mip_layer_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
@@ -1089,7 +1090,9 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             (uint32_t const *)(image_mapping + image_layout.offset + y * image_layout.rowPitch);
          for (uint32_t x = 0; x < width; ++x) {
             uint32_t expected =
-               operation == RV710_LINEAR_IMAGE_CLEAR ? clear_word : source_words[y * width + x];
+               operation == RV710_LINEAR_IMAGE_CLEAR && !meta_state_only
+                  ? clear_word
+                  : source_words[y * width + x];
             if (offset_copy) {
                /* Independent oracle for source (1,2), destination (3,1), size (125,62).
                 * Check inverse sentinels everywhere outside the destination rectangle too.
@@ -1103,7 +1106,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                if (!layer_negative && !mip_layer_negative) {
                   fprintf(stderr,
                           "  RV710 linear image %s mismatch at (%u,%u): got 0x%08x expected 0x%08x\n",
-                          operation == RV710_LINEAR_IMAGE_CLEAR     ? "clear"
+                          operation == RV710_LINEAR_IMAGE_CLEAR
+                             ? (meta_state_only ? "state-only clear" : "clear")
                           : operation == RV710_TILED_IMAGE_ROUNDTRIP ? "tiled roundtrip"
                                                                      : "buffer upload",
                           x, y,
@@ -1122,7 +1126,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
       }
       if (!failures)
          fprintf(stderr, "  RV710 linear image %ux%u %s readback completed\n", width, height,
-                 operation == RV710_LINEAR_IMAGE_CLEAR     ? "clear"
+                 operation == RV710_LINEAR_IMAGE_CLEAR
+                    ? (meta_state_only ? "state-only clear" : "clear")
                  : operation == RV710_TILED_IMAGE_ROUNDTRIP ? "tiled roundtrip"
                                                             : "buffer upload");
       goto cleanup;
