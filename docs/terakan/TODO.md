@@ -267,6 +267,12 @@ with TYPE2 padding and has its own inverse-sentinel oracle: the 2x2 source remai
 the fence completes. Five consecutive RV710 runs passed with no kernel journal entries. This
 validates acceptance of the emitted R700 meta state/preamble only, not shader execution or
 render-target writes, and does not alter the normal clear expectation.
+The opt-in `TERAKAN_DEBUG_TERASCALE_1_TILED_IMAGE_CLEAR=1` variant now exercises the same clear
+shader against an optimal (microtiled 2x2) color image, then copies that image into the linear
+host-visible target for readback. Five consecutive RV710 runs produced the requested green word at
+every texel, while the inverse linear-image sentinel detects a skipped clear or copy; the kernel
+journal stayed empty. This is the first tiled CB clear/readback result, still limited to one
+single-sample RGBA8 level and not evidence for macrotiles, layers, MSAA or general submission.
 
 The next image-to-buffer attempt established a separate safety boundary. Its generation-neutral
 NIR shader still writes the destination with `MEM_RAT`, but the R600/R700 CB converter deliberately
