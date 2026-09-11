@@ -263,12 +263,15 @@ uint32_t * terakan_hw_config_draw_terascale_1_write_db_depth_view(uint32_t * pac
                                                                     uint32_t value);
 
 /* Convert the currently all-zero Evergreen software state to the actual no-query, no-HTILE R700
- * baseline from r600_emit_db_misc_state(). Nonzero Evergreen state is rejected because its fields
- * are not register-compatible with R700 and the corresponding query/HTILE/copy paths have not been
- * ported. There is no DB_RENDER_OVERRIDE2 equivalent on R600/R700.
+ * baseline from r600_emit_db_misc_state(). The only extra state accepted is R700 conservative-Z:
+ * it originates in the Evergreen-shaped DB_SHADER_CONTROL value, but classic emits it here. R600
+ * only admits EXPORT_ANY_Z because the classic driver gates this transition on gfx_level >= R700.
+ * Nonzero Evergreen render-control state is rejected because query/HTILE/copy paths are unported.
+ * There is no DB_RENDER_OVERRIDE2 equivalent on R600/R700.
  */
 bool terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
-   uint32_t evergreen_db_render_control, uint32_t evergreen_db_render_override,
+   uint32_t evergreen_db_render_control, uint32_t evergreen_db_render_override, bool is_r700,
+   uint32_t conservative_z_export,
    uint32_t * db_render_control_out, uint32_t * db_render_override_out);
 
 /* PKT3_SET_CONTEXT_REG_SEQ(DB_RENDER_CONTROL, DB_RENDER_OVERRIDE), 2 dwords. Values must already
@@ -283,7 +286,8 @@ uint32_t * terakan_hw_config_draw_terascale_1_write_db_render_control_override(
  * encode the R700 register without including evergreend.h. `source_format` is validated but not
  * emitted: classic r600_update_db_shader_control() selects only DUAL_EXPORT_ENABLE on R700, while
  * DB_SOURCE_FORMAT exists only on Evergreen. The other trailing fields are rejected until their
- * semantics are ported; notably, conservative-Z belongs in R700 DB_RENDER_CONTROL.
+ * semantics are ported. `conservative_z_export` is validated here but emitted in R700
+ * DB_RENDER_CONTROL, its actual classic location.
  */
 struct terakan_hw_config_draw_terascale_1_db_shader_control_input {
    bool z_export_enable;

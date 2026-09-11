@@ -520,16 +520,23 @@ terakan_hw_config_draw_terascale_1_write_db_depth_view(uint32_t * const packet,
 bool
 terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
    uint32_t const evergreen_db_render_control, uint32_t const evergreen_db_render_override,
+   bool const is_r700, uint32_t const conservative_z_export,
    uint32_t * const db_render_control_out, uint32_t * const db_render_override_out)
 {
-   if (evergreen_db_render_control || evergreen_db_render_override) {
+   if (evergreen_db_render_control || evergreen_db_render_override ||
+       conservative_z_export > V_028D0C_EXPORT_GREATER_THAN_Z ||
+       (!is_r700 && conservative_z_export != V_028D0C_EXPORT_ANY_Z)) {
       return false;
    }
 
-   /* Exact no-query, no-HTILE branch of r600_emit_db_misc_state(). Occlusion queries, HTILE,
-    * depth/stencil copy and conservative-Z export are separate unported state transitions.
+   /* Exact no-query, no-HTILE branch of r600_emit_db_misc_state(). Its R700 conservative-Z branch
+    * runs before the no-query ZPASS baseline; R600 deliberately skips it. Occlusion queries, HTILE
+    * and depth/stencil copy remain separate unported state transitions.
     */
-   *db_render_control_out = S_028D0C_ZPASS_INCREMENT_DISABLE(1);
+   *db_render_control_out = S_028D0C_ZPASS_INCREMENT_DISABLE(1) |
+                            (is_r700
+                                ? S_028D0C_CONSERVATIVE_Z_EXPORT(conservative_z_export)
+                                : 0);
    *db_render_override_out =
       S_028D10_FORCE_HIZ_ENABLE(V_028D10_FORCE_DISABLE) |
       S_028D10_FORCE_HIS_ENABLE0(V_028D10_FORCE_DISABLE) |
@@ -560,7 +567,8 @@ terakan_hw_config_draw_terascale_1_db_shader_control_encode(
     */
    if (input->z_order > V_02880C_EARLY_Z_THEN_RE_Z || input->source_format > 2 ||
        input->exec_on_hier_fail || input->exec_on_noop || input->alpha_to_mask_disable ||
-       input->depth_before_shader || input->conservative_z_export || input->unknown_bits) {
+       input->depth_before_shader ||
+       input->conservative_z_export > V_028D0C_EXPORT_GREATER_THAN_Z || input->unknown_bits) {
       return false;
    }
 

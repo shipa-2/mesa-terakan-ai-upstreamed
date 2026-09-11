@@ -1649,7 +1649,11 @@ terakan_hw_config_draw_emit_db_render_control(
       uint32_t db_render_control, db_render_override;
       if (!terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
              command_writer->hw_config_draw.db_render_control_,
-             command_writer->hw_config_draw.db_render_override_, &db_render_control,
+             command_writer->hw_config_draw.db_render_override_,
+             terakan_physical_device_chip_family_is_r700(
+                terakan_gfx_command_writer_physical_device(command_writer)->chip_info.chip_family),
+             G_02880C_CONSERVATIVE_Z_EXPORT(command_writer->hw_config_draw.db_shader_control_),
+             &db_render_control,
              &db_render_override)) {
          return;
       }
@@ -1981,11 +1985,28 @@ terakan_hw_config_draw_emit_db_shader_control(
          return;
       }
 
+      /* Classic r600_emit_db_misc_state() writes conservative depth export with the paired
+       * DB_RENDER_CONTROL/OVERRIDE state, not DB_SHADER_CONTROL. Repeat the baseline pair when a
+       * fragment shader changes, so a shader-only transition cannot retain the preceding pipeline's
+       * depth layout. Query, HTILE and copy state stays unavailable and zero here.
+       */
+      uint32_t r700_render_control, r700_render_override;
+      if (!terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
+             command_writer->hw_config_draw.db_render_control_,
+             command_writer->hw_config_draw.db_render_override_,
+             terakan_physical_device_chip_family_is_r700(
+                terakan_gfx_command_writer_physical_device(command_writer)->chip_info.chip_family),
+             input.conservative_z_export, &r700_render_control, &r700_render_override)) {
+         return;
+      }
+
       uint32_t * packet = terakan_gfx_command_writer_emit(
-         command_writer, TERAKAN_GFX_COMMAND_WRITER_EMIT_CONTENTS_CONFIG, 3);
+         command_writer, TERAKAN_GFX_COMMAND_WRITER_EMIT_CONTENTS_CONFIG, 4 + 3);
       if (unlikely(packet == NULL)) {
          return;
       }
+      packet = terakan_hw_config_draw_terascale_1_write_db_render_control_override(
+         packet, r700_render_control, r700_render_override);
       packet =
          terakan_hw_config_draw_terascale_1_write_db_shader_control(packet, r700_control);
       terakan_gfx_command_writer_emit_done(command_writer, packet);

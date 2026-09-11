@@ -139,7 +139,7 @@ test_db_render_control_override_classic_r700_baseline(void)
 {
    uint32_t db_render_control, db_render_override;
    CHECK(terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
-      0, 0, &db_render_control, &db_render_override));
+      0, 0, true, V_028D0C_EXPORT_ANY_Z, &db_render_control, &db_render_override));
    CHECK(db_render_control == S_028D0C_ZPASS_INCREMENT_DISABLE(1));
    CHECK(db_render_override ==
          (S_028D10_FORCE_HIZ_ENABLE(V_028D10_FORCE_DISABLE) |
@@ -150,9 +150,9 @@ test_db_render_control_override_classic_r700_baseline(void)
     * so a future caller cannot accidentally pass colliding fields through to R700.
     */
    CHECK(!terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
-      1, 0, &db_render_control, &db_render_override));
+      1, 0, true, V_028D0C_EXPORT_ANY_Z, &db_render_control, &db_render_override));
    CHECK(!terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
-      0, 1, &db_render_control, &db_render_override));
+      0, 1, true, V_028D0C_EXPORT_ANY_Z, &db_render_control, &db_render_override));
 
    uint32_t packets[4];
    uint32_t * const end = terakan_hw_config_draw_terascale_1_write_db_render_control_override(
@@ -160,6 +160,29 @@ test_db_render_control_override_classic_r700_baseline(void)
    CHECK(end == packets + 4);
    CHECK(packets[2] == S_028D0C_ZPASS_INCREMENT_DISABLE(1));
    CHECK(packets[3] == db_render_override);
+}
+
+static void
+test_db_render_control_conservative_z(void)
+{
+   uint32_t db_render_control, db_render_override;
+   CHECK(terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
+      0, 0, true, V_028D0C_EXPORT_LESS_THAN_Z, &db_render_control, &db_render_override));
+   CHECK(db_render_control ==
+         (S_028D0C_ZPASS_INCREMENT_DISABLE(1) |
+          S_028D0C_CONSERVATIVE_Z_EXPORT(V_028D0C_EXPORT_LESS_THAN_Z)));
+   CHECK(terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
+      0, 0, true, V_028D0C_EXPORT_GREATER_THAN_Z, &db_render_control, &db_render_override));
+   CHECK(db_render_control ==
+         (S_028D0C_ZPASS_INCREMENT_DISABLE(1) |
+          S_028D0C_CONSERVATIVE_Z_EXPORT(V_028D0C_EXPORT_GREATER_THAN_Z)));
+
+   /* r600_emit_db_misc_state() gates this field on gfx_level >= R700. This is the negative
+    * control against accidentally emitting the R700 field on R600. */
+   CHECK(!terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
+      0, 0, false, V_028D0C_EXPORT_LESS_THAN_Z, &db_render_control, &db_render_override));
+   CHECK(!terakan_hw_config_draw_terascale_1_db_render_control_override_encode(
+      0, 0, true, V_028D0C_EXPORT_RESERVED, &db_render_control, &db_render_override));
 }
 
 static struct terakan_hw_config_draw_terascale_1_db_shader_control_input
@@ -219,7 +242,11 @@ test_db_shader_control_rejects_evergreen_only_fields(void)
    input.depth_before_shader = true;
    CHECK(!terakan_hw_config_draw_terascale_1_db_shader_control_encode(&input, &value));
    input.depth_before_shader = false;
-   input.conservative_z_export = 1;
+   /* A valid conservative-Z mode is consumed by the paired DB_RENDER_CONTROL encoder rather
+    * than this register. The reserved fourth encoding remains rejected here. */
+   input.conservative_z_export = V_028D0C_EXPORT_LESS_THAN_Z;
+   CHECK(terakan_hw_config_draw_terascale_1_db_shader_control_encode(&input, &value));
+   input.conservative_z_export = V_028D0C_EXPORT_RESERVED;
    CHECK(!terakan_hw_config_draw_terascale_1_db_shader_control_encode(&input, &value));
    input.conservative_z_export = 0;
    input.source_format = 3;
@@ -1031,6 +1058,7 @@ main(void)
    test_db_depth_view();
    test_db_render_control_override();
    test_db_render_control_override_classic_r700_baseline();
+   test_db_render_control_conservative_z();
    test_db_shader_control();
    test_db_shader_control_rejects_evergreen_only_fields();
    test_db_depth_size();

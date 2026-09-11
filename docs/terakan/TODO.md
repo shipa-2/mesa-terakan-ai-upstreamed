@@ -704,16 +704,20 @@ oracle; indirect indexed draws and all indexed hardware execution remain unverif
   matching `r600_update_db_shader_control()`, which controls the corresponding
   R700 choice solely with `DUAL_EXPORT_ENABLE`. Reserved source format 3,
   unknown bits, `EXEC_ON_HIER_FAIL`, `EXEC_ON_NOOP`,
-  `ALPHA_TO_MASK_DISABLE`, `DEPTH_BEFORE_SHADER` and conservative-Z are
-  rejected rather than reinterpreted. Conservative-Z is known to belong in
-  R700 `DB_RENDER_CONTROL` via `r600_emit_db_misc_state()`, but that state
-  transition has not been connected yet; early-fragment-tests and fragment
-  shader memory side effects likewise remain unsupported. The CPU oracle
-  checks all shared fields, omission of `DB_SOURCE_FORMAT`, exact packet
-  addressing, and each rejection boundary. Its negative control removed
-  `DUAL_EXPORT_ENABLE` from the implementation and failed the exact payload
-  comparison. No R700 command stream was submitted and no RV710 rendering is
-  proved by this test.
+  `ALPHA_TO_MASK_DISABLE` and `DEPTH_BEFORE_SHADER` are rejected rather than
+  reinterpreted. Conservative-Z is the deliberate exception: the valid
+  `ANY`/`LESS`/`GREATER` modes are removed from the R700 `DB_SHADER_CONTROL`
+  payload and emitted in the paired `DB_RENDER_CONTROL` write at `0x028D0C`,
+  exactly as `r600_emit_db_misc_state()` does; the transition is admitted only
+  for R700, because that reference gates it on `gfx_level >= R700`. Every
+  fragment-shader change repeats the baseline control/override pair before
+  the shader-control write, so a previous pipeline's depth layout cannot
+  persist. The CPU oracle checks the exact R700 values and rejects both an
+  R600 `LESS` mode and the reserved fourth encoding; in the external negative
+  control, inverting the R700 admission predicate made the `LESS` assertion
+  fail. Early-fragment-tests, queries, HTILE, copy state and fragment shader
+  memory side effects remain unsupported. No R700 command stream was
+  submitted and no RV710 rendering is proved by this packet test.
 
 - TeraScale 1 (R600/R700) `RADEON_INFO_TILING_CONFIG` decode:
   `terakan_physical_device_decode_tiling_config()`
