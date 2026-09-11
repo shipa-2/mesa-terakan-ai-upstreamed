@@ -299,7 +299,9 @@ Evergreen-shaped CP-DMA fill with `CP DMA src buffer too small (67380228 20480)`
 repeated. `terakan_barrier_initialize_color_metadata()` now records a command-buffer error for
 TeraScale 1 before emitting that fill; MSAA color metadata initialization, clear and resolve remain
 unsupported until a R700-specific mechanism is implemented and read back. The ordinary submit
-guard is unchanged.
+guard is unchanged. After rebuilding this guard on RV710, the same opt-in probe stopped with
+`VK_ERROR_UNKNOWN` during command recording and produced no new `CP DMA`, `Invalid command
+stream`, ring or GPU-reset journal entry; this verifies the safety boundary, not the operation.
 
 The next image-to-buffer attempt established a separate safety boundary. Its generation-neutral
 NIR shader still writes the destination with `MEM_RAT`, but the R600/R700 CB converter deliberately
