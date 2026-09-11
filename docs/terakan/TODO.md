@@ -364,6 +364,10 @@ copies the four blocks from a linear image into a 40-byte inverse buffer, and
 `readback-negative` repeats it at `bufferOffset = 8`. Both modes passed on RV710 in the final
 paired run with no kernel messages. This adds image-to-buffer evidence only for linear level zero,
 single layer; it does not validate tiled, mip/layer BC1 or other R700 devices.
+The `readback-mip-layer` variant then uses a 16x16 two-level, two-layer linear image and reads
+level 1/layer 1; its negative control reads level 0/layer 0 and observed the expected 32-byte
+mismatch. Both passed on RV710 with no kernel messages, demonstrating the linear BC1 mip offset
+and layer slice address calculation. Tiled BC1 and other R700 families remain unverified.
 The existing CPU tiling test also fixes this exact fixture: 384x144 base, 256x128 padded mip,
 0x36000 mip offset and 0x56000 total bytes. Adding 256 bytes to the production mip-offset output
 failed its new assertion; restoring the calculation passed. The mutation was CPU-only and was
