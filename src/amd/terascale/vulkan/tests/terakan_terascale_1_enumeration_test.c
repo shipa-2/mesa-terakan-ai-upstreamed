@@ -122,7 +122,8 @@ terascale_1_tiled_image_clear_opted_in(void)
 {
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_TILED_IMAGE_CLEAR");
    return value != NULL && (!strcmp(value, "1") || !strcmp(value, "macro") ||
-                            !strcmp(value, "edge"));
+                            !strcmp(value, "edge") || !strcmp(value, "layer") ||
+                            !strcmp(value, "layer-negative"));
 }
 
 static char const *
@@ -698,8 +699,13 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                                    !strcmp(macro_variant, "mip-layer-negative");
    bool const mip_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                          (!strcmp(macro_variant, "mip") || mip_layer_copy || mip_layer_negative);
-   bool const layer_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
-                           (!strcmp(macro_variant, "layer") || mip_layer_copy || mip_layer_negative);
+   bool const clear_layer = operation == RV710_TILED_IMAGE_CLEAR && tiled_clear_variant &&
+                            (!strcmp(tiled_clear_variant, "layer") ||
+                             !strcmp(tiled_clear_variant, "layer-negative"));
+   bool const clear_layer_negative = clear_layer && !strcmp(tiled_clear_variant, "layer-negative");
+   bool const layer_copy = (operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
+                            (!strcmp(macro_variant, "layer") || mip_layer_copy || mip_layer_negative)) ||
+                           clear_layer;
    bool const layer_negative = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                                !strcmp(macro_variant, "layer-negative");
    bool const roundtrip_macrotiled = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
@@ -708,12 +714,13 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                                       mip_layer_negative);
    bool const clear_macrotiled = operation == RV710_TILED_IMAGE_CLEAR && tiled_clear_variant &&
                                  (!strcmp(tiled_clear_variant, "macro") ||
-                                  !strcmp(tiled_clear_variant, "edge"));
+                                  !strcmp(tiled_clear_variant, "edge") || clear_layer);
    bool const macrotiled = roundtrip_macrotiled || clear_macrotiled;
    bool const macro_edge = macrotiled &&
                            (offset_copy || mip_copy || layer_copy || layer_negative || mip_layer_negative ||
                             (roundtrip_macrotiled && !strcmp(macro_variant, "edge")) ||
-                            (clear_macrotiled && !strcmp(tiled_clear_variant, "edge")));
+                            (clear_macrotiled && (!strcmp(tiled_clear_variant, "edge") ||
+                                                  clear_layer)));
    uint32_t const width = macro_edge ? 129 : macrotiled ? 128 : 2;
    uint32_t const height = macro_edge ? 65 : macrotiled ? 128 : 2;
    uint32_t const byte_count = width * height * 4;
@@ -1038,8 +1045,13 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                                  &other_layer_colour, 1, &other_layer_range);
          }
          if (operation == RV710_TILED_IMAGE_CLEAR) {
-            vkCmdClearColorImage(command_buffer, tiled_image, VK_IMAGE_LAYOUT_GENERAL, &clear_value,
-                                 1, &clear_range);
+            VkImageSubresourceRange const target_clear_range = {
+               .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+               .baseArrayLayer = clear_layer ? 1 : 0,
+               .layerCount = 1,
+            };
+            vkCmdClearColorImage(command_buffer, tiled_image, VK_IMAGE_LAYOUT_GENERAL,
+                                 &clear_value, 1, &target_clear_range);
          } else {
             vkCmdCopyBufferToImage(command_buffer, buffer, tiled_image, VK_IMAGE_LAYOUT_GENERAL, 1,
                                    &region);
@@ -1076,7 +1088,10 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
          VkImageCopy const image_region = {
             .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                .mipLevel = mip_layer_negative ? 0 : mip_copy ? 1 : 0,
-                               .baseArrayLayer = mip_layer_negative ? 0 : layer_copy ? 1 : 0, .layerCount = 1},
+                               .baseArrayLayer = mip_layer_negative || clear_layer_negative
+                                                    ? 0
+                                                    : layer_copy ? 1 : 0,
+                               .layerCount = 1},
             .srcOffset = {offset_copy ? 1 : 0, offset_copy ? 2 : 0, 0},
             .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
             .dstOffset = {offset_copy ? 3 : 0, offset_copy ? 1 : 0, 0},
@@ -1157,7 +1172,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             }
          }
       }
-      if ((layer_negative || mip_layer_negative) && mismatch_count == width * height) {
+      if ((layer_negative || mip_layer_negative || clear_layer_negative) &&
+          mismatch_count == width * height) {
          /* Negative hardware control: layer 0 was deliberately magenta, while the oracle expects
           * layer 1's distinct pattern. A full mismatch proves baseArrayLayer is observable. */
          fprintf(stderr, "  RV710 %s-negative control observed %u expected mismatches\n",
