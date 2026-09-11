@@ -114,3 +114,21 @@ Its export handler still compares 0x9010 and performs relocation at .text
 0x69ef5..0x69f34. This agrees with the source path; it is not a reproducible
 whole-module build comparison. No need to request an unknown local patch just
 to locate the export handler. No GPU work was sent by this source/binary audit.
+
+## Assembler encoding oracle
+
+`terakan_shader_generation_test` now assembles an indexed four-DWORD MEM_EXPORT
+through the existing bytecode builder, with the gfx level selected for RV710.
+The independent literal oracle is `c382a123 9d00f000`: source R5, index R7,
+DWORD base 0x123, unused ARRAY_SIZE zero, one burst, mask 0xf, barrier set,
+R700 CF opcode 0x3a. It is part of the already registered CPU test in both
+meson.build and bin/terakan-test, not a new unregistered executable.
+
+Negative control: temporarily changing the R700 opcode table entry to Evergreen
+0x55 produced `c382a123 aa80f000` and exit status 1; restoring 0x3a passed.
+The opcode table has no retained edits. This verifies instruction packing only:
+the fixture has no initialized GPRs, aperture or launch and must never be
+submitted. It does not prove a NIR SSBO store lowers to this instruction.
+SFN's existing MemRingOutInstr is not an interchangeable wrapper: it restricts
+opcodes to ring exports and emits indexed ARRAY_SIZE=0xfff, whereas the R700
+MEM_EXPORT description explicitly requires that instruction field to be zero.

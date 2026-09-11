@@ -4,10 +4,58 @@
  */
 
 #include "terakan_shader_generation.h"
+#include "gallium/drivers/r600/r600_asm.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+static bool
+check_r700_memory_export_encoding(void)
+{
+   /* AMD R700 ISA 9-25 and 10-10/10-12: indexed write, four DWORDs,
+    * source R5, DWORD address R7 + 0x123, ARRAY_SIZE unused (zero).
+    * This is an encoding fixture, NOT an executable shader: the registers
+    * are not initialized and no export aperture or ES launch is configured.
+    * In particular this does not prove a NIR SSBO store lowers to MEM_EXPORT.
+    */
+   struct r600_isa *isa = calloc(1, sizeof(*isa));
+   if (!isa)
+      return false;
+   struct r600_bytecode bc = {0};
+   r600_bytecode_init(&bc, terakan_shader_gfx_level(CHIP_RV710), CHIP_RV710, false);
+   if (r600_isa_init(bc.gfx_level, isa)) {
+      r600_isa_destroy(isa);
+      return false;
+   }
+   bc.isa = isa;
+   struct r600_bytecode_output const output = {
+      .op = CF_OP_MEM_EXPORT,
+      .type = 1,
+      .gpr = 5,
+      .index_gpr = 7,
+      .array_base = 0x123,
+      .array_size = 0,
+      .elem_size = 3,
+      .comp_mask = 0xf,
+      .burst_count = 1,
+   };
+   bool passed = !r600_bytecode_add_output(&bc, &output) && !r600_bytecode_build(&bc);
+   /* Literal words keep this oracle independent of the encoder's field macros.
+    * BARRIER=1, CF_INST=0x3a, COMP_MASK=0xf, all other WORD1 fields zero.
+    */
+   passed = passed && bc.ndw == 2 && bc.bytecode[0] == UINT32_C(0xc382a123) &&
+            bc.bytecode[1] == UINT32_C(0x9d00f000);
+   if (!passed) {
+      fprintf(stderr, "R700 MEM_EXPORT encoding mismatch (ndw=%u)\n", bc.ndw);
+      if (bc.bytecode && bc.ndw >= 2)
+         fprintf(stderr, "  actual=%08x %08x expected=c382a123 9d00f000\n",
+                 bc.bytecode[0], bc.bytecode[1]);
+   }
+   r600_bytecode_clear(&bc);
+   r600_isa_destroy(isa);
+   return passed;
+}
 
 static bool
 check(enum radeon_family const family, enum amd_gfx_level const expected_gfx_level,
@@ -65,6 +113,7 @@ int
 main(void)
 {
    bool passed = true;
+   passed &= check_r700_memory_export_encoding();
 
    passed &= check(CHIP_R600, R600, ISA_CC_R600);
    passed &= check(CHIP_RS880, R600, ISA_CC_R600);
