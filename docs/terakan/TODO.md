@@ -254,6 +254,11 @@ different and none equals the requested `0xff00ff00`, so a skipped draw cannot p
 This proves one single-sample linear clear through CB and its host-visible cache tail. It does not
 yet prove texture sampling, image-to-buffer meta copying, tiled CB addressing, layers, MSAA,
 application rendering or general queue safety; the default TeraScale 1 submit guard remains.
+The separate `TERAKAN_DEBUG_TERASCALE_1_META_STATE_ONLY=1` variant replaces the meta draw packet
+with TYPE2 padding and has its own inverse-sentinel oracle: the 2x2 source remains unchanged while
+the fence completes. Five consecutive RV710 runs passed with no kernel journal entries. This
+validates acceptance of the emitted R700 meta state/preamble only, not shader execution or
+render-target writes, and does not alter the normal clear expectation.
 
 The next image-to-buffer attempt established a separate safety boundary. Its generation-neutral
 NIR shader still writes the destination with `MEM_RAT`, but the R600/R700 CB converter deliberately
