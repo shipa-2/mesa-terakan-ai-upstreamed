@@ -687,6 +687,12 @@ oracle; indirect indexed draws and all indexed hardware execution remain unverif
   final CF pair and a wrong-ARRAY_SIZE negative control. This is not submission
   support: base/size emission, safe BO bounds, ES launch, loads, atomics and
   dynamic bindings remain deliberately unavailable.
+  A second CPU oracle now enters the same lowering from vertex NIR with
+  `key.vs.as_es`, the stage the R6xx/R7xx guide says is the pre-GS
+  memory-output stage: static `store_ssbo` becomes `MEM_EXPORT` on RV710 and
+  remains `MEM_RAT` on Evergreen. Its forced-false R700 predicate negative
+  control fails. This does not enable the still-disabled geometry feature or
+  establish a runnable ES/GS draw, aperture bounds, or submission support.
 
 - TeraScale 1 (R700) `DB_SHADER_CONTROL`: the runtime emitter no longer sends
   the full Evergreen payload merely because both generations place the

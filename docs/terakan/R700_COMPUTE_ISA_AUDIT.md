@@ -170,3 +170,23 @@ slot offset, on R700 rather than aliasing it to the one SX aperture. It does not
 SX_MEMORY_EXPORT_BASE/SIZE, establish the aperture's size encoding, lower SSBO
 loads/atomics/images, provide ES launch state, or make application dispatch
 safe. Therefore it is intentionally not grounds for relaxing submit.
+
+## ES vertex-NIR lowering oracle
+
+The R6xx/R7xx 3D guide describes ES as the pre-GS stage that only outputs to
+memory. This gives an R7xx-specific route worth investigating: a vertex shader
+compiled with `key.vs.as_es`, followed by a geometry stage and a normal draw,
+rather than an Evergreen `DISPATCH_*` packet. It is not yet a launch recipe:
+the public Vulkan `geometryShader` feature remains disabled, the driver has no
+copy-shader implementation for that pipeline, and no such draw has been
+submitted.
+
+`terakan_sfn_lowering_test` now builds a real vertex NIR shader containing a
+static `store_ssbo`, translates it with `key.vs.as_es`, `ISA_CC_R700` and
+`CHIP_RV710`, and checks the SFN text contains `MEM_EXPORT` and not `MEM_RAT`.
+The identical NIR translated as Evergreen is required to contain `MEM_RAT` and
+not `MEM_EXPORT`, preserving the existing descriptor-backed path. Negative
+control: temporarily forcing the R700 condition in `RatInstr::emit_ssbo_store`
+false made the exact R700 assertion fail; the condition was restored. This
+proves the NIR-to-SFN generation boundary only, not bytecode execution, aperture
+bounds, ES/GS state, or a hardware draw.

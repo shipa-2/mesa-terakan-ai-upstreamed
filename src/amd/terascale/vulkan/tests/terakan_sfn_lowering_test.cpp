@@ -13,6 +13,7 @@
 #include "gallium/drivers/r600/sfn/sfn_nir.h"
 #include "gallium/drivers/r600/sfn/sfn_nir_lower_alu.h"
 #include "gallium/drivers/r600/sfn/sfn_scheduler.h"
+#include "gallium/drivers/r600/sfn/sfn_shader.h"
 #include "gallium/drivers/r600/sfn/sfn_shader_fs.h"
 #include "gallium/drivers/r600/sfn/sfn_split_address_loads.h"
 #include "nir.h"
@@ -164,6 +165,50 @@ test_r700_mem_export_assembler_lowering()
    r600_bytecode_clear(&compiled.bc);
    r600_isa_destroy(isa);
    release_pool();
+}
+
+static void
+test_r700_es_nir_ssbo_store_lowering()
+{
+   using namespace r600;
+
+   /* An R7xx compute-like export shader is still a vertex NIR program with
+    * key.vs.as_es. Check the real NIR translation boundary, not merely a
+    * hand-created MemRingOutInstr: a static SSBO store must become the sole
+    * R700 SX MEMORY_EXPORT form. This remains a CPU oracle -- it says nothing
+    * about the ES/GS launch sequence or SX aperture programming. */
+   static nir_shader_compiler_options const options = {};
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_VERTEX, &options,
+                                                   "terakan R700 ES SSBO store test");
+   nir_store_ssbo(&b, nir_imm_int(&b, 0x12345678), nir_imm_int(&b, 0), nir_imm_int(&b, 0));
+
+   r600_shader_key key = {};
+   key.vs.as_es = true;
+   ShaderBindingLayout const binding_layout = {};
+
+   init_pool();
+   Shader * const r700 = Shader::translate_from_nir(b.shader, nullptr, nullptr, key, ISA_CC_R700,
+                                                     CHIP_RV710, binding_layout);
+   CHECK(r700 != nullptr);
+   std::ostringstream r700_text;
+   r700->print(r700_text);
+   CHECK(r700_text.str().find("MEM_EXPORT") != std::string::npos);
+   CHECK(r700_text.str().find("MEM_RAT") == std::string::npos);
+   delete r700;
+
+   /* The same NIR must retain the established descriptor-backed RAT path on
+    * Evergreen. This is a generation-boundary check, not evidence that the
+    * R700 export can run without its one explicitly configured aperture. */
+   Shader * const evergreen = Shader::translate_from_nir(
+      b.shader, nullptr, nullptr, key, ISA_CC_EVERGREEN, CHIP_CEDAR, binding_layout);
+   CHECK(evergreen != nullptr);
+   std::ostringstream evergreen_text;
+   evergreen->print(evergreen_text);
+   CHECK(evergreen_text.str().find("MEM_EXPORT") == std::string::npos);
+   CHECK(evergreen_text.str().find("MEM_RAT") != std::string::npos);
+   delete evergreen;
+   release_pool();
+   ralloc_free(b.shader);
 }
 
 static r600::Shader *
@@ -525,6 +570,7 @@ main()
    test_fetch_dead_required_instruction_readiness();
    test_rat_dead_required_instruction_readiness();
    test_r700_mem_export_assembler_lowering();
+   test_r700_es_nir_ssbo_store_lowering();
    test_address_load_ignores_future_register_write();
    test_address_load_ignores_loop_carried_future_parent();
    test_shared_store_lowering();
