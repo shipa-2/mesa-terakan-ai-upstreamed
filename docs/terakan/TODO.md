@@ -186,12 +186,11 @@ aligned buffer-to-buffer CP-DMA copy with host readback. Unaligned copies, fills
 transitions under GPU work, descriptors and draws remain unvalidated; the default submit guard
 therefore remains in place.
 
-The unaligned branch of B3 is separately checked once on RV710: source offset 4 and 60 copied
-bytes force a 28-byte source head, one 32-byte bulk packet and the four-byte discard tail that
-restores the internal CP-DMA alignment counter. Every copied dword matched and the untouched final
-destination dword retained its inverse-pattern sentinel; the kernel journal stayed clean. This is
-one successful boundary observation, not a substitute for a repeated stress series or for image
-copy validation.
+The unaligned branch of B3 is separately checked on RV710: source offset 4 and 60 copied bytes
+force a 28-byte source head, one 32-byte bulk packet and the four-byte discard tail that restores
+the internal CP-DMA alignment counter. Every copied dword matched and the untouched final
+destination dword retained its inverse-pattern sentinel in five consecutive runs; the kernel
+journal stayed clean. This remains a boundary check, not a substitute for image copy validation.
 
 The opt-in CP-DMA fill probe (`TERAKAN_DEBUG_TERASCALE_1_CP_DMA_FILL=1`) is deliberately not
 counted as working on RV710: three consecutive attempts returned `VK_ERROR_UNKNOWN` (`-13`) from
