@@ -402,17 +402,19 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
                             !strcmp(macro_variant, "offset");
    bool const mip_layer_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                                !strcmp(macro_variant, "mip-layer");
+   bool const mip_layer_negative = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
+                                   !strcmp(macro_variant, "mip-layer-negative");
    bool const mip_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
-                         (!strcmp(macro_variant, "mip") || mip_layer_copy);
+                         (!strcmp(macro_variant, "mip") || mip_layer_copy || mip_layer_negative);
    bool const layer_copy = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
-                           (!strcmp(macro_variant, "layer") || mip_layer_copy);
+                           (!strcmp(macro_variant, "layer") || mip_layer_copy || mip_layer_negative);
    bool const layer_negative = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                                !strcmp(macro_variant, "layer-negative");
    bool const macrotiled = operation == RV710_TILED_IMAGE_ROUNDTRIP && macro_variant &&
                            (!strcmp(macro_variant, "1") || !strcmp(macro_variant, "edge") ||
-                            offset_copy || mip_copy || layer_copy || layer_negative);
+                            offset_copy || mip_copy || layer_copy || layer_negative || mip_layer_negative);
    bool const macro_edge = macrotiled &&
-                           (offset_copy || mip_copy || layer_copy || layer_negative ||
+                           (offset_copy || mip_copy || layer_copy || layer_negative || mip_layer_negative ||
                             !strcmp(macro_variant, "edge"));
    uint32_t const width = macro_edge ? 129 : macrotiled ? 128 : 2;
    uint32_t const height = macro_edge ? 65 : macrotiled ? 128 : 2;
@@ -631,7 +633,8 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
    VkBufferImageCopy const region = {
       .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                            .mipLevel = mip_copy ? 1 : 0,
-                           .baseArrayLayer = (layer_copy || layer_negative) ? 1 : 0, .layerCount = 1},
+                           .baseArrayLayer = (layer_copy || layer_negative || mip_layer_negative) ? 1 : 0,
+                           .layerCount = 1},
       .imageExtent = {width, height, 1},
    };
    VkClearColorValue const clear_value = {.float32 = {0.0f, 1.0f, 0.0f, 1.0f}};
@@ -760,13 +763,14 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             },
          };
          barriers[0].subresourceRange.levelCount = mip_copy ? 2 : 1;
-         barriers[0].subresourceRange.layerCount = (layer_copy || layer_negative) ? 2 : 1;
+         barriers[0].subresourceRange.layerCount =
+            (layer_copy || layer_negative || mip_layer_negative) ? 2 : 1;
          vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                               VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, barriers);
          VkImageCopy const image_region = {
             .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                               .mipLevel = mip_copy ? 1 : 0,
-                               .baseArrayLayer = layer_copy ? 1 : 0, .layerCount = 1},
+                               .mipLevel = mip_layer_negative ? 0 : mip_copy ? 1 : 0,
+                               .baseArrayLayer = mip_layer_negative ? 0 : layer_copy ? 1 : 0, .layerCount = 1},
             .srcOffset = {offset_copy ? 1 : 0, offset_copy ? 2 : 0, 0},
             .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
             .dstOffset = {offset_copy ? 3 : 0, offset_copy ? 1 : 0, 0},
@@ -828,7 +832,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             }
             if (row[x] != expected) {
                ++mismatch_count;
-               if (!layer_negative) {
+               if (!layer_negative && !mip_layer_negative) {
                   fprintf(stderr,
                           "  RV710 linear image %s mismatch at (%u,%u): got 0x%08x expected 0x%08x\n",
                           operation == RV710_LINEAR_IMAGE_CLEAR     ? "clear"
@@ -841,7 +845,7 @@ check_rv710_linear_image_readback(VkPhysicalDevice const physical_device, VkDevi
             }
          }
       }
-      if (layer_negative && mismatch_count == width * height) {
+      if ((layer_negative || mip_layer_negative) && mismatch_count == width * height) {
          /* Negative hardware control: layer 0 was deliberately magenta, while the oracle expects
           * layer 1's distinct pattern. A full mismatch proves baseArrayLayer is observable. */
          fprintf(stderr, "  RV710 layer-negative control observed %u expected mismatches\n",
