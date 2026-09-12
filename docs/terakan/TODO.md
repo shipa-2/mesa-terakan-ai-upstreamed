@@ -766,6 +766,13 @@ same split between `r600_state.c` and `evergreen_state.c`.
   diagnostic and not a valid shader-execution or safety oracle. It has not yet
   run on hardware.
 
+  On a fresh boot with successful radeon ring tests, the packet-only mode also
+  timed out and locked ring 0 (`VK_TIMEOUT` plus the same kernel stall), even
+  though it emitted `vertexCount=0`. Together with five clean state-only runs,
+  this localizes the current failure to `DRAW_INDEX_AUTO` or its immediately
+  required VGT draw-init state, before shader execution. It is still not a
+  supported draw path and no guard has been removed.
+
   The same probe now accepts `TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW=state-only`,
   which omits only the `DRAW` packet while retaining the render pass, pipeline,
   vertex binding and all generated per-draw state. It is intended to isolate a
