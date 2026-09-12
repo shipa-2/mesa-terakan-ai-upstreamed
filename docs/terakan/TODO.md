@@ -498,6 +498,14 @@ single-sample linear CB path and constant NIR VS/PS can survive a cold boot; it 
 the negative fetch-constant result, since that control still has not produced a valid application
 draw. The ordinary submit guard remains in place and no general queue safety is inferred.
 
+An uncommitted diagnostic then replaced only the generated fetch program with the empty fetch
+shader while retaining the ordinary attribute-reading VS, vertex binding, descriptors and all
+draw state. This `TERAKAN_DEBUG_TERASCALE_1_EMPTY_FETCH=1` run still timed out and produced the
+same RV710 ring-0 lockup. The diagnostic was removed and the machine rebooted. This negative
+control rules out the fetch program alone as the complete explanation, but does not distinguish
+the VS launch, SQ resource allocation, draw-init state or another packet, and it is not a valid
+rendering result. No default behavior changed.
+
 ## Completed and regression-covered
 
 - Multisample correctness, closed as a group. Seven defects, each with a probe or
