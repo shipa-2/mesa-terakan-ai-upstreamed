@@ -468,6 +468,14 @@ case and a negative-controlled two-byte-base case (the test fails if the helper 
 zero). This proves only the CPU calculation and descriptor plumbing; no RV710 draw readback with
 an unaligned `VkBuffer` offset has been obtained yet.
 
+As a hardware negative control for the remaining application-draw failure, RV710 was run from a
+clean ring-test state with `TERAKAN_DEBUG_DISABLE_MEGA_FETCH_COALESCING=1`. This forces every
+attribute fetch to be emitted as an independent mega-fetch rather than leaving mini-fetches in a
+coalesced group. The application draw still timed out and the radeon journal reported a ring-0
+GPU lockup. Thus the mini-fetch/mega-fetch bit choice is not sufficient to explain the failure;
+the fetch-shader/resource path remains unvalidated. The machine was rebooted after the probe, and
+the default submit guard remains unchanged.
+
 ## Completed and regression-covered
 
 - Multisample correctness, closed as a group. Seven defects, each with a probe or
