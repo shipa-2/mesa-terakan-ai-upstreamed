@@ -747,8 +747,17 @@ same split between `r600_state.c` and `evergreen_state.c`.
   default suite and does not establish indexed/indirect, descriptor, depth,
   MSAA, or general queue correctness. The R700 build and the default remote
   RV710 suite both pass 14/14 CPU and 69/69 GPU without opt-in submission.
-  The RV710 is still awaiting a clean reboot after an earlier metadata
-  experiment locked ring 0, so this probe has not yet run on hardware.
+  An earlier metadata experiment locked ring 0; a later clean boot enabled
+  the first controlled application-draw attempt documented below.
+
+  A clean-boot five-run normal series was subsequently attempted on RV710
+  after boot ID `7602857f-6127-4ab7-9c11-97f86d21882e`. The first submit timed
+  out (`VK_TIMEOUT`), and the kernel reported a ring-0 lockup followed by a
+  soft reset; the second process read back four mismatches, and the remaining
+  three returned `VK_ERROR_DEVICE_LOST`. This is a reproducible negative B4
+  result, not a rendering success. The negative application-draw mode was not
+  run after the first lockup, and the TeraScale 1 submit guard remains
+  unchanged.
 
   A remote `TERAKAN_DEBUG_DRY_RUN_SUBMIT=1` capture on the same RV710 did
   construct a 536-dword graphics IB with four BO relocations and no
