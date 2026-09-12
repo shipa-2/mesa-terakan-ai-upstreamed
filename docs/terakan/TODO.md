@@ -491,6 +491,13 @@ the VTX/fetch execution or its resource/SQ setup is still the first failing stag
 probe was followed by a reboot; it does not validate a rendered result and does not change the
 submit guard.
 
+After the subsequent reboot, the positive `...=constant` control was rerun five consecutive times
+on RV710. Each run completed the host readback with `mismatches=0`, and the kernel journal had no
+ring lockup or command-parser message in the same interval. This re-confirms that the R700 submit,
+single-sample linear CB path and constant NIR VS/PS can survive a cold boot; it does **not** weaken
+the negative fetch-constant result, since that control still has not produced a valid application
+draw. The ordinary submit guard remains in place and no general queue safety is inferred.
+
 ## Completed and regression-covered
 
 - Multisample correctness, closed as a group. Seven defects, each with a probe or
