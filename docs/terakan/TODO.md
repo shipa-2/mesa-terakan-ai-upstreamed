@@ -759,6 +759,13 @@ same split between `r600_state.c` and `evergreen_state.c`.
   run after the first lockup, and the TeraScale 1 submit guard remains
   unchanged.
 
+  Because state-only passed 5/5 on a clean boot while the normal draw then
+  locked ring 0, the probe now also accepts
+  `TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW=packet-only`. It emits the same
+  `DRAW` packet with `vertexCount=0`; this is explicitly a parser/packet
+  diagnostic and not a valid shader-execution or safety oracle. It has not yet
+  run on hardware.
+
   The same probe now accepts `TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW=state-only`,
   which omits only the `DRAW` packet while retaining the render pass, pipeline,
   vertex binding and all generated per-draw state. It is intended to isolate a

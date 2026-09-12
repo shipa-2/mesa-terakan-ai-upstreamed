@@ -139,7 +139,7 @@ terascale_1_application_draw_mode(void)
 {
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW");
    return value != NULL && (!strcmp(value, "1") || !strcmp(value, "negative") ||
-                            !strcmp(value, "state-only"))
+                            !strcmp(value, "state-only") || !strcmp(value, "packet-only"))
              ? value
              : NULL;
 }
@@ -1619,11 +1619,14 @@ cleanup:
  * opt-in because it reaches the still-unvalidated R700 draw path. The `negative` mode keeps the
  * command identical but expects the wrong provoking-vertex colour, so a skipped draw or an
  * unconditional success cannot pass. The `state-only` mode records the same render-pass and
- * pipeline state but omits DRAW, isolating state setup from shader/vertex execution. This does
- * not validate indexed/indirect draws, descriptors, depth, MSAA or general queue submission. */
+ * pipeline state but omits DRAW, isolating state setup from shader/vertex execution. The
+ * `packet-only` mode emits DRAW with vertexCount 0 and is only a parser/packet diagnostic, not a
+ * valid execution or safety oracle. This does not validate indexed/indirect draws, descriptors,
+ * depth, MSAA or general queue submission. */
 static uint32_t
 check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice const device,
-                             VkQueue const queue, bool const negative, bool const state_only)
+                             VkQueue const queue, bool const negative, bool const state_only,
+                             bool const packet_only)
 {
    VkPhysicalDeviceMemoryProperties memory_properties;
    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
@@ -1928,7 +1931,7 @@ check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice co
       vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
       vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, &vertex_offset);
       if (!state_only)
-         vkCmdDraw(command_buffer, 3, 1, 0, 0);
+         vkCmdDraw(command_buffer, packet_only ? 0 : 3, 1, 0, 0);
       vkCmdEndRenderPass(command_buffer);
    }
    VkImageMemoryBarrier const to_host = {
@@ -1967,8 +1970,9 @@ check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice co
       failures = 1;
       goto cleanup;
    }
-   if (state_only) {
-      fprintf(stderr, "  RV710 application-draw state-only completed\n");
+   if (state_only || packet_only) {
+      fprintf(stderr, "  RV710 application-draw %s completed\n",
+              state_only ? "state-only" : "packet-only");
       goto cleanup;
    }
    VkMappedMemoryRange const image_invalidate = {
@@ -2123,7 +2127,8 @@ main(void)
                application_draw_mode != NULL
                   ? check_rv710_application_draw(physical_devices[device_index], device, queue,
                                                  !strcmp(application_draw_mode, "negative"),
-                                                 !strcmp(application_draw_mode, "state-only"))
+                                                 !strcmp(application_draw_mode, "state-only"),
+                                                 !strcmp(application_draw_mode, "packet-only"))
                : bc1_mode != NULL
                   ? check_rv710_linear_bc1_roundtrip(physical_devices[device_index], device, queue,
                                                      !strcmp(bc1_mode, "negative") ||
