@@ -476,6 +476,13 @@ GPU lockup. Thus the mini-fetch/mega-fetch bit choice is not sufficient to expla
 the fetch-shader/resource path remains unvalidated. The machine was rebooted after the probe, and
 the default submit guard remains unchanged.
 
+A second fetch-type differential on a fresh RV710 boot forced vertex-rate attributes to use
+`SQ_VTX_FETCH_VERTEX_DATA` instead of Terakan's Vulkan-motivated `SQ_VTX_FETCH_NO_INDEX_OFFSET`.
+The draw still timed out with the same ring-0 lockup. This rejects both the fetch-type choice and
+mega-fetch coalescing as isolated explanations; the generated fetch program, its SQ configuration,
+or the resource packet still needs an exact R700 comparison. The temporary switch was removed and
+was never enabled by default.
+
 ## Completed and regression-covered
 
 - Multisample correctness, closed as a group. Seven defects, each with a probe or
