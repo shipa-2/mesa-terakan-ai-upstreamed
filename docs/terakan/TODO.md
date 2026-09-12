@@ -763,7 +763,11 @@ same split between `r600_state.c` and `evergreen_state.c`.
   which omits only the `DRAW` packet while retaining the render pass, pipeline,
   vertex binding and all generated per-draw state. It is intended to isolate a
   state-packet failure from shader/vertex execution after the RV710 is rebooted;
-  no result has been claimed for it yet.
+  no hardware result has been claimed for it yet. A dry-run capture is 240
+  dwords with one BO relocation (the normal draw capture is 536 dwords with
+  four). The first post-lockup boot's radeon self-test already failed on the
+  GFX ring with `-110`, so its state-only submit returned `VK_ERROR_DEVICE_LOST`
+  without a new kernel diagnostic and is not evidence about the packet itself.
 
   A remote `TERAKAN_DEBUG_DRY_RUN_SUBMIT=1` capture on the same RV710 did
   construct a 536-dword graphics IB with four BO relocations and no
