@@ -146,7 +146,7 @@ terascale_1_application_draw_mode(void)
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW");
    return value != NULL && (!strcmp(value, "1") || !strcmp(value, "negative") ||
                             !strcmp(value, "state-only") || !strcmp(value, "packet-only") ||
-                            !strcmp(value, "constant"))
+                            !strcmp(value, "constant") || !strcmp(value, "fetch-constant"))
              ? value
              : NULL;
 }
@@ -1628,12 +1628,14 @@ cleanup:
  * unconditional success cannot pass. The `state-only` mode records the same render-pass and
  * pipeline state but omits DRAW, isolating state setup from shader/vertex execution. The
  * `packet-only` mode emits DRAW with vertexCount 0 and is only a parser/packet diagnostic, not a
- * valid execution or safety oracle. This does not validate indexed/indirect draws, descriptors,
- * depth, MSAA or general queue submission. */
+ * valid execution or safety oracle. The `fetch-constant` mode keeps the ordinary vertex-fetch VS
+ * but uses a constant PS, isolating fetch execution from SPI interpolation/input state. This does
+ * not validate indexed/indirect draws, descriptors, depth, MSAA or general queue submission. */
 static uint32_t
 check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice const device,
                              VkQueue const queue, bool const negative, bool const state_only,
-                             bool const packet_only, bool const constant_shader)
+                             bool const packet_only, bool const constant_shader,
+                             bool const fetch_constant_shader)
 {
    VkPhysicalDeviceMemoryProperties memory_properties;
    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
@@ -1791,9 +1793,10 @@ check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice co
    result = vkCreateShaderModule(device, &vertex_module_info, NULL, &vertex_module);
    VkShaderModuleCreateInfo const fragment_module_info = {
       .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-      .codeSize = constant_shader ? sizeof(application_constant_fragment_spirv)
+      .codeSize = (constant_shader || fetch_constant_shader) ? sizeof(application_constant_fragment_spirv)
                                   : sizeof(application_fragment_spirv),
-      .pCode = constant_shader ? application_constant_fragment_spirv : application_fragment_spirv,
+      .pCode = (constant_shader || fetch_constant_shader) ? application_constant_fragment_spirv
+                                                          : application_fragment_spirv,
    };
    if (result == VK_SUCCESS)
       result = vkCreateShaderModule(device, &fragment_module_info, NULL, &fragment_module);
@@ -1988,7 +1991,7 @@ check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice co
       .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = image_memory, .size = VK_WHOLE_SIZE,
    };
    vkInvalidateMappedMemoryRanges(device, 1, &image_invalidate);
-   uint32_t const expected = constant_shader ? UINT32_C(0xff0000ff)
+   uint32_t const expected = (constant_shader || fetch_constant_shader) ? UINT32_C(0xff0000ff)
                                              : negative ? vertex_values[0] : vertex_values[2];
    uint32_t mismatches = 0;
    for (uint32_t y = 0; y < 2; ++y) {
@@ -2139,7 +2142,8 @@ main(void)
                                                  !strcmp(application_draw_mode, "negative"),
                                                  !strcmp(application_draw_mode, "state-only"),
                                                  !strcmp(application_draw_mode, "packet-only"),
-                                                 !strcmp(application_draw_mode, "constant"))
+                                                 !strcmp(application_draw_mode, "constant"),
+                                                 !strcmp(application_draw_mode, "fetch-constant"))
                : bc1_mode != NULL
                   ? check_rv710_linear_bc1_roundtrip(physical_devices[device_index], device, queue,
                                                      !strcmp(bc1_mode, "negative") ||

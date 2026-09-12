@@ -483,6 +483,14 @@ mega-fetch coalescing as isolated explanations; the generated fetch program, its
 or the resource packet still needs an exact R700 comparison. The temporary switch was removed and
 was never enabled by default.
 
+The `TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW=fetch-constant` differential keeps the ordinary
+vertex-fetch vertex shader and its bound vertex buffer, but replaces the fragment shader with a
+constant colour shader that consumes no interpolated inputs. On a clean RV710 boot it still timed
+out with a ring-0 lockup. This separates the failure from SPI interpolation/varying consumption:
+the VTX/fetch execution or its resource/SQ setup is still the first failing stage. The temporary
+probe was followed by a reboot; it does not validate a rendered result and does not change the
+submit guard.
+
 ## Completed and regression-covered
 
 - Multisample correctness, closed as a group. Seven defects, each with a probe or
