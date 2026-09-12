@@ -759,6 +759,12 @@ same split between `r600_state.c` and `evergreen_state.c`.
   run after the first lockup, and the TeraScale 1 submit guard remains
   unchanged.
 
+  The same probe now accepts `TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW=state-only`,
+  which omits only the `DRAW` packet while retaining the render pass, pipeline,
+  vertex binding and all generated per-draw state. It is intended to isolate a
+  state-packet failure from shader/vertex execution after the RV710 is rebooted;
+  no result has been claimed for it yet.
+
   A remote `TERAKAN_DEBUG_DRY_RUN_SUBMIT=1` capture on the same RV710 did
   construct a 536-dword graphics IB with four BO relocations and no
   Evergreen `INDEX_BUFFER_SIZE` (0x13), `PFP_SYNC_ME` (0x42), or CS partial
