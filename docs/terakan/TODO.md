@@ -514,6 +514,14 @@ The expected four readback mismatches are therefore recorded, not treated as a p
 separates the failing ordinary VS/fetch combination from the generic draw packet. The temporary
 mode and source changes were removed; no submit policy changed.
 
+A further temporary shader mutation kept a real vertex fetch and the ordinary constant fragment
+shader but removed the VS PARAM/varying export (`terakan_vertex_fetch_bounds.vert`). The first
+RV710 submission still timed out with the same ring-0 lockup; later attempts were contaminated by
+the driver's reset loop (one stale readback and one `VK_ERROR_DEVICE_LOST`). The shader was
+restored and the machine rebooted. This negative control rules out the PARAM export alone as the
+complete cause; it is not a rendering result and does not identify the remaining SQ/VS or draw
+state fault.
+
 ## Completed and regression-covered
 
 - Multisample correctness, closed as a group. Seven defects, each with a probe or
