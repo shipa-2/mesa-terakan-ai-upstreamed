@@ -506,6 +506,14 @@ control rules out the fetch program alone as the complete explanation, but does 
 the VS launch, SQ resource allocation, draw-init state or another packet, and it is not a valid
 rendering result. No default behavior changed.
 
+As a second differential, a temporary `constant-vs` test selected the NIR constant VS together
+with the ordinary application FS (the interface intentionally has no matching varying, so its
+readback is not a correctness oracle). Three consecutive RV710 submissions completed without a
+timeout or kernel error, while the ordinary VS path still locks even with its fetch shader removed.
+The expected four readback mismatches are therefore recorded, not treated as a pass: this only
+separates the failing ordinary VS/fetch combination from the generic draw packet. The temporary
+mode and source changes were removed; no submit policy changed.
+
 ## Completed and regression-covered
 
 - Multisample correctness, closed as a group. Seven defects, each with a probe or
