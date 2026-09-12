@@ -774,6 +774,12 @@ same split between `r600_state.c` and `evergreen_state.c`.
   zero-count packet is not proof that shader execution was skipped. It is still
   not a supported draw path and no guard has been removed.
 
+  The probe also has a `constant` shader mode, built from a separate minimal
+  NIR/GLSL VS/FS pair that uses `gl_VertexIndex` for coverage but no vertex
+  attribute fetch and writes a constant red pixel. This is the next differential
+  needed to separate the draw launch from the R700 vertex-fetch shader; it has
+  passed compilation and default suites only, not RV710 hardware.
+
   The same probe now accepts `TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW=state-only`,
   which omits only the `DRAW` packet while retaining the render pass, pipeline,
   vertex binding and all generated per-draw state. It is intended to isolate a

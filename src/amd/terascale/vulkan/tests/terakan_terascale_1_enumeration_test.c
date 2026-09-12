@@ -26,6 +26,12 @@ static uint32_t const application_vertex_spirv[] = {
 static uint32_t const application_fragment_spirv[] = {
 #include "terakan_vertex_fetch_bounds.frag.spv.h"
 };
+static uint32_t const application_constant_vertex_spirv[] = {
+#include "terakan_application_constant.vert.spv.h"
+};
+static uint32_t const application_constant_fragment_spirv[] = {
+#include "terakan_application_constant.frag.spv.h"
+};
 
 #define VK_CHECK(expression)                                                                       \
    do {                                                                                            \
@@ -139,7 +145,8 @@ terascale_1_application_draw_mode(void)
 {
    char const * const value = getenv("TERAKAN_DEBUG_TERASCALE_1_APPLICATION_DRAW");
    return value != NULL && (!strcmp(value, "1") || !strcmp(value, "negative") ||
-                            !strcmp(value, "state-only") || !strcmp(value, "packet-only"))
+                            !strcmp(value, "state-only") || !strcmp(value, "packet-only") ||
+                            !strcmp(value, "constant"))
              ? value
              : NULL;
 }
@@ -1626,7 +1633,7 @@ cleanup:
 static uint32_t
 check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice const device,
                              VkQueue const queue, bool const negative, bool const state_only,
-                             bool const packet_only)
+                             bool const packet_only, bool const constant_shader)
 {
    VkPhysicalDeviceMemoryProperties memory_properties;
    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
@@ -1777,14 +1784,16 @@ check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice co
 
    VkShaderModuleCreateInfo const vertex_module_info = {
       .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-      .codeSize = sizeof(application_vertex_spirv),
-      .pCode = application_vertex_spirv,
+      .codeSize = constant_shader ? sizeof(application_constant_vertex_spirv)
+                                  : sizeof(application_vertex_spirv),
+      .pCode = constant_shader ? application_constant_vertex_spirv : application_vertex_spirv,
    };
    result = vkCreateShaderModule(device, &vertex_module_info, NULL, &vertex_module);
    VkShaderModuleCreateInfo const fragment_module_info = {
       .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-      .codeSize = sizeof(application_fragment_spirv),
-      .pCode = application_fragment_spirv,
+      .codeSize = constant_shader ? sizeof(application_constant_fragment_spirv)
+                                  : sizeof(application_fragment_spirv),
+      .pCode = constant_shader ? application_constant_fragment_spirv : application_fragment_spirv,
    };
    if (result == VK_SUCCESS)
       result = vkCreateShaderModule(device, &fragment_module_info, NULL, &fragment_module);
@@ -1979,7 +1988,8 @@ check_rv710_application_draw(VkPhysicalDevice const physical_device, VkDevice co
       .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = image_memory, .size = VK_WHOLE_SIZE,
    };
    vkInvalidateMappedMemoryRanges(device, 1, &image_invalidate);
-   uint32_t const expected = negative ? vertex_values[0] : vertex_values[2];
+   uint32_t const expected = constant_shader ? UINT32_C(0xff0000ff)
+                                             : negative ? vertex_values[0] : vertex_values[2];
    uint32_t mismatches = 0;
    for (uint32_t y = 0; y < 2; ++y) {
       uint32_t const * const row = (uint32_t const *)(image_mapping + image_layout.offset +
@@ -2128,7 +2138,8 @@ main(void)
                   ? check_rv710_application_draw(physical_devices[device_index], device, queue,
                                                  !strcmp(application_draw_mode, "negative"),
                                                  !strcmp(application_draw_mode, "state-only"),
-                                                 !strcmp(application_draw_mode, "packet-only"))
+                                                 !strcmp(application_draw_mode, "packet-only"),
+                                                 !strcmp(application_draw_mode, "constant"))
                : bc1_mode != NULL
                   ? check_rv710_linear_bc1_roundtrip(physical_devices[device_index], device, queue,
                                                      !strcmp(bc1_mode, "negative") ||

@@ -2365,6 +2365,27 @@ if with_tests
         dependencies : vulkan_loader_dep,
       )
 
+      terakan_application_constant_vertex_spv = custom_target(
+        'terakan_application_constant.vert.spv.h',
+        input : 'tests/terakan_application_constant.vert',
+        output : 'terakan_application_constant.vert.spv.h',
+        command : [
+          prog_glslang, '-V', '-x', '-o', '@OUTPUT@', '@INPUT@',
+          glslang_quiet, glslang_depfile,
+        ],
+        depfile : 'terakan_application_constant.vert.spv.h.d',
+      )
+      terakan_application_constant_fragment_spv = custom_target(
+        'terakan_application_constant.frag.spv.h',
+        input : 'tests/terakan_application_constant.frag',
+        output : 'terakan_application_constant.frag.spv.h',
+        command : [
+          prog_glslang, '-V', '-x', '-o', '@OUTPUT@', '@INPUT@',
+          glslang_quiet, glslang_depfile,
+        ],
+        depfile : 'terakan_application_constant.frag.spv.h.d',
+      )
+
       # Deliberately not wired into test(): a characterization tool whose output is a table to
       # read, not a pass/fail result. See the comment at the top of its source.
       terakan_depth_clear_extent_probe = executable(
@@ -2576,6 +2597,8 @@ if with_tests
         'tests/terakan_terascale_1_enumeration_test.c',
         terakan_vertex_fetch_bounds_vertex_spv,
         terakan_vertex_fetch_bounds_fragment_spv,
+        terakan_application_constant_vertex_spv,
+        terakan_application_constant_fragment_spv,
       ],
       dependencies : vulkan_loader_dep,
     )
